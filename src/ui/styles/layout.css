@@ -1,0 +1,365 @@
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* Top bar ------------------------------------------------------------ */
+.topbar {
+  height: var(--topbar-h);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-1);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-size: 14px;
+  padding-right: 6px;
+}
+.brand-mark {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: var(--accent);
+  display: grid;
+  place-items: center;
+}
+.project-name {
+  height: 30px;
+  min-width: 80px;
+  max-width: 320px;
+  padding: 0 8px;
+  border-radius: var(--radius-s);
+  border: 1px solid transparent;
+  background: transparent;
+  font-weight: 600;
+  font-size: 13px;
+  outline: none;
+  text-overflow: ellipsis;
+}
+.project-name:hover {
+  border-color: var(--line);
+}
+.project-name:focus {
+  border-color: var(--accent);
+  background: var(--bg-2);
+}
+.save-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.topbar .sep {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  margin: 0 4px;
+}
+.privacy-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 12px;
+  background: rgba(62, 207, 142, 0.1);
+  color: #7fe0b2;
+  font-size: 11.5px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.readonly-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: rgba(242, 181, 68, 0.12);
+  color: #f5cf86;
+  border-bottom: 1px solid rgba(242, 181, 68, 0.3);
+  font-size: 12.5px;
+}
+
+/* Workspace ---------------------------------------------------------- */
+.workspace {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.upper {
+  display: flex;
+  min-height: 160px;
+  flex-shrink: 0;
+}
+.lower {
+  flex: 1;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+}
+
+.splitter-v {
+  width: 5px;
+  margin: 0 -2px;
+  cursor: col-resize;
+  position: relative;
+  z-index: 5;
+  flex-shrink: 0;
+  touch-action: none;
+}
+.splitter-h {
+  height: 5px;
+  margin: -2px 0;
+  cursor: row-resize;
+  position: relative;
+  z-index: 5;
+  flex-shrink: 0;
+  touch-action: none;
+}
+.splitter-v::after,
+.splitter-h::after {
+  content: '';
+  position: absolute;
+  background: var(--line);
+  transition: background 0.12s;
+}
+.splitter-v::after {
+  left: 2px;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+}
+.splitter-h::after {
+  top: 2px;
+  left: 0;
+  right: 0;
+  height: 1px;
+}
+.splitter-v:hover::after,
+.splitter-h:hover::after,
+.splitter-v.dragging::after,
+.splitter-h.dragging::after {
+  background: var(--accent);
+}
+.splitter-v:focus-visible::after,
+.splitter-h:focus-visible::after {
+  background: var(--focus);
+}
+
+/* Left dock ---------------------------------------------------------- */
+.left-dock {
+  display: flex;
+  background: var(--bg-1);
+  min-width: 0;
+  flex-shrink: 0;
+}
+.rail {
+  width: 64px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+  padding: 6px 4px;
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+}
+.rail-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 2px 6px;
+  border: 0;
+  border-radius: var(--radius-m);
+  background: transparent;
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.rail-btn:hover {
+  color: var(--text-1);
+  background: var(--bg-2);
+}
+.rail-btn[aria-selected='true'] {
+  color: var(--text-1);
+  background: var(--bg-3);
+}
+.rail-btn[aria-selected='true'] svg {
+  color: var(--accent-text);
+}
+.panel {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 42px;
+  padding: 0 10px 0 12px;
+  border-bottom: 1px solid var(--line);
+  flex-shrink: 0;
+}
+.panel-head h2 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  flex: 1;
+}
+.panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+}
+
+/* Center ------------------------------------------------------------- */
+.center {
+  flex: 1;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-0);
+}
+
+/* Right dock --------------------------------------------------------- */
+.right-dock {
+  background: var(--bg-1);
+  min-width: 0;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Drag & drop overlay */
+.drop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  display: grid;
+  place-items: center;
+  background: rgba(14, 15, 17, 0.75);
+  border: 2px dashed var(--accent);
+  pointer-events: none;
+  font-size: 16px;
+  font-weight: 600;
+}
+.drop-overlay .inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-1);
+}
+
+/* Tablet: the inspector floats over the preview ---------------------- */
+@media (max-width: 1180px) {
+  .app[data-layout='tablet'] .right-dock {
+    position: absolute;
+    right: 0;
+    top: var(--topbar-h);
+    bottom: 0;
+    z-index: 50;
+    box-shadow: -10px 0 30px rgba(0, 0, 0, 0.4);
+    border-left: 1px solid var(--line);
+  }
+}
+
+/* Phone -------------------------------------------------------------- */
+.app[data-layout='phone'] .topbar {
+  padding: 0 6px;
+  gap: 2px;
+}
+.app[data-layout='phone'] .privacy-pill,
+.app[data-layout='phone'] .save-state span,
+.app[data-layout='phone'] .brand-name {
+  display: none;
+}
+.phone-nav {
+  display: flex;
+  justify-content: space-around;
+  border-top: 1px solid var(--line);
+  background: var(--bg-1);
+  padding: 4px 4px calc(4px + env(safe-area-inset-bottom));
+  flex-shrink: 0;
+}
+.phone-nav button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 10.5px;
+  padding: 4px 8px;
+  border-radius: var(--radius-m);
+  min-width: 52px;
+}
+.phone-nav button[aria-pressed='true'] {
+  color: var(--accent-text);
+  background: var(--bg-2);
+}
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  background: rgba(0, 0, 0, 0.45);
+}
+.sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 61;
+  max-height: 72dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-1);
+  border-radius: 14px 14px 0 0;
+  box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+  animation: sheet-in 0.18s ease-out;
+}
+.sheet-grip {
+  width: 36px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-4);
+  margin: 8px auto 2px;
+  flex-shrink: 0;
+}
+@keyframes sheet-in {
+  from {
+    transform: translateY(30%);
+    opacity: 0;
+  }
+}
+
+.panel-crash {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 16px;
+  font-size: 12.5px;
+}

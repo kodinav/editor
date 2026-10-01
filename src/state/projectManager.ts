@@ -1,0 +1,356 @@
+import { produce } from 'immer';
+import { uid } from '@/core/ids';
+import { createProject, projectDuration } from '@/core/project';
+import { migrateProject } from '@/core/schema';
+import type { Project, ProjectSettings } from '@/core/types';
+import { analysis } from '@/media/analysis';
+import { media } from '@/media/registry';
+import { player } from '@/playback/player';
+import {
+  allProjects,
+  getProjectMeta,
+  deleteDerived,
+  deleteProjectRecord,
+  kvGet,
+  kvSet,
+  listProjects,
+  loadProject,
+  putPeaks,
+  saveProject,
+  type ProjectMeta,
+} from '@/storage/db';
+import { deleteFile, DIRS, getFile, listFiles, opfsUsable, requestPersistence } from '@/storage/opfs';
+import { restoreNoiseReduction } from './denoiseTools';
+import { editor, toast, useEditor, usePlayback } from './store';
+
+/**
+ * Project lifecycle: open/create/duplicate/delete, autosave with crash
+ * recovery, cross-tab locking, and garbage collection of orphaned media.
+ */
+
+const LAST_PROJECT_KEY = 'lastProjectId';
+const SAVE_DEBOUNCE = 700;
+
+let saveTimer: number | null = null;
+let saving: Promise<void> | null = null;
+let lastThumbAt = 0;
+let releaseLock: (() => void) | null = null;
+
+export function projectMeta(p: Project, thumbnail?: Blob): ProjectMeta {
+  return {
+    id: p.id,
+    name: p.name,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+    duration: projectDuration(p),
+    width: p.settings.width,
+    height: p.settings.height,
+    thumbnail,
+  };
+}
+
+async function writeNow(): Promise<void> {
+  const s = editor();
+  if (s.readOnlyReason) return;
+  const p = s.gestureBase ?? s.project;
+  let thumb: Blob | undefined;
+  if (Date.now() - lastThumbAt > 15000 && Object.keys(p.clips).length > 0) {
+    lastThumbAt = Date.now();
+    thumb = (await player.snapshot().catch(() => null)) ?? undefined;
+  }
+  if (!thumb) thumb = (await getProjectMeta(p.id).catch(() => undefined))?.thumbnail;
+  useEditor.setState({ saveState: 'saving' });
+  try {
+    await saveProject(p, projectMeta(p, thumb));
+    if (import.meta.env.DEV) assertReloadsUnchanged(p);
+    await kvSet(LAST_PROJECT_KEY, p.id);
+    if (editor().project === p || editor().gestureBase === p) useEditor.setState({ saveState: 'saved' });
+    else useEditor.setState({ saveState: 'unsaved' });
+  } catch (e) {
+    console.error('Save failed', e);
+    useEditor.setState({ saveState: 'error' });
+    toast({ kind: 'error', message: 'Could not save your project locally.', detail: String((e as Error).message ?? e) });
+  }
+}
+
+/**
+ * Development safety net: everything the app saves must load back unchanged
+ * through the repair pass in core/sanitize.ts (a mismatch fails the E2E run).
+ */
+function assertReloadsUnchanged(p: Project) {
+  const saved = JSON.parse(JSON.stringify(p));
+  const where = firstDifference(saved, JSON.parse(JSON.stringify(migrateProject(JSON.parse(JSON.stringify(p))))));
+  if (where !== null) {
+    setTimeout(() => {
+      throw new Error(`A saved project would change when reopened (at ${where || 'root'}).`);
+    });
+  }
+}
+
+function firstDifference(a: unknown, b: unknown, path = ''): string | null {
+  if (a === b) return null;
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null || Array.isArray(a) !== Array.isArray(b)) return path;
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) {
+    const d = firstDifference((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], path ? `${path}.${k}` : k);
+    if (d !== null) return d;
+  }
+  return null;
+}
+
+export function saveSoon() {
+  if (saveTimer !== null) clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(() => {
+    saveTimer = null;
+    void flushSave();
+  }, SAVE_DEBOUNCE);
+}
+
+export async function flushSave(): Promise<void> {
+  if (saveTimer !== null) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  while (saving) await saving;
+  if (editor().saveState === 'saved') return;
+  saving = writeNow().finally(() => (saving = null));
+  await saving;
+}
+
+function startAutosave() {
+  useEditor.subscribe((s, prev) => {
+    if (s.project !== prev.project && s.project.id === prev.project.id) saveSoon();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') void flushSave();
+  });
+  window.addEventListener('pagehide', () => void flushSave());
+  window.addEventListener('beforeunload', (e) => {
+    void flushSave();
+    const busy = Object.values(editor().project.assets).some((a) => a.status === 'processing' || (!a.stored && a.status === 'ready' && media.getProgress(a.id)));
+    if (busy) {
+      e.preventDefault();
+      e.returnValue = '';
+    }
+  });
+}
+
+async function acquireLock(id: string): Promise<boolean> {
+  releaseLock?.();
+  releaseLock = null;
+  if (!('locks' in navigator)) return true;
+  return new Promise<boolean>((resolve) => {
+    navigator.locks
+      .request(`cutline-project-${id}`, { ifAvailable: true }, (lock) => {
+        if (!lock) {
+          resolve(false);
+          return undefined;
+        }
+        resolve(true);
+        return new Promise<void>((release) => (releaseLock = release));
+      })
+      .catch(() => resolve(true));
+  });
+}
+
+/** Take over a project that is open in another tab. */
+export async function stealLock(): Promise<void> {
+  const id = editor().project.id;
+  releaseLock?.();
+  await new Promise<void>((resolve) => {
+    navigator.locks.request(`cutline-project-${id}`, { steal: true }, () => {
+      resolve();
+      return new Promise<void>((release) => (releaseLock = release));
+    });
+  });
+  useEditor.setState({ readOnlyReason: null });
+  saveSoon();
+}
+
+/** Re-run analysis for assets whose conformed audio/thumbnails are missing. */
+function repairDerivedData(ids: string[]) {
+  for (const id of ids) {
+    const a = editor().project.assets[id];
+    const file = media.getFile(id);
+    if (!a || !file) continue;
+    media.setProgress(id, { stage: 'audio', value: 0 });
+    analysis
+      .analyze(id, file, { copy: false, thumbs: false, audio: true }, (stage, value) => media.setProgress(id, { stage, value }))
+      .promise.then(async (res) => {
+        if (res.pcm) {
+          editor().silent((d) => {
+            const x = d.assets[id];
+            if (x?.audio) x.audio.conformed = true;
+          });
+          await media.openPcm(editor().project.assets[id]);
+          await restoreNoiseReduction(id, true);
+        }
+        if (res.peaks) {
+          const pk = { assetId: id, rate: res.peaks.rate, data: res.peaks.data };
+          await putPeaks(pk);
+          media.setPeaks(id, pk);
+        }
+      })
+      .catch((e) => console.warn('Audio repair failed', e))
+      .finally(() => media.setProgress(id, null));
+  }
+}
+
+export async function openProject(p: Project): Promise<void> {
+  await flushSave();
+  player.pause();
+  media.reset();
+  const migrated = migrateProject(p);
+  const { missing, needsConform } = await media.attachProject(migrated);
+  const fixed = produce(migrated, (d) => {
+    for (const a of Object.values(d.assets)) {
+      if (missing.includes(a.id)) a.status = 'missing';
+      else if (a.status === 'missing' || a.status === 'processing') a.status = 'ready';
+    }
+  });
+  editor().loadProject(fixed);
+  usePlayback.getState().set({ time: 0, playing: false });
+  const locked = await acquireLock(fixed.id);
+  useEditor.setState({ readOnlyReason: locked ? null : 'This project is open in another tab. Changes here will not be saved.' });
+  await kvSet(LAST_PROJECT_KEY, fixed.id);
+  if (missing.length > 0) {
+    toast({
+      kind: 'warning',
+      message: `${missing.length} media file${missing.length > 1 ? 's are' : ' is'} offline.`,
+      detail: 'Relink them from the Media panel to restore playback.',
+      timeout: 8000,
+    });
+  }
+  repairDerivedData(needsConform);
+  for (const a of Object.values(fixed.assets)) {
+    if (a.audio?.denoise && !missing.includes(a.id) && !needsConform.includes(a.id)) void restoreNoiseReduction(a.id);
+  }
+  player.requestRender();
+}
+
+export async function newProject(settings: Partial<ProjectSettings> = {}, name?: string): Promise<void> {
+  const projects = await listProjects();
+  const p = createProject(name ?? nextUntitled(projects), settings);
+  await openProject(p);
+  useEditor.setState({ saveState: 'unsaved' });
+  await flushSave();
+}
+
+function nextUntitled(list: ProjectMeta[]): string {
+  const names = new Set(list.map((m) => m.name));
+  if (!names.has('Untitled project')) return 'Untitled project';
+  let n = 2;
+  while (names.has(`Untitled project ${n}`)) n++;
+  return `Untitled project ${n}`;
+}
+
+export async function openProjectById(id: string): Promise<void> {
+  const p = await loadProject(id);
+  if (!p) {
+    toast({ kind: 'error', message: 'That project could not be found.' });
+    return;
+  }
+  await openProject(p);
+}
+
+export async function duplicateProject(id: string): Promise<void> {
+  await flushSave();
+  const src = id === editor().project.id ? editor().project : await loadProject(id);
+  if (!src) return;
+  const copy: Project = { ...structuredClone(src), id: uid('prj'), name: `${src.name} (copy)`, createdAt: Date.now(), updatedAt: Date.now() };
+  const meta = (await getProjectMeta(id))?.thumbnail;
+  await saveProject(copy, projectMeta(copy, meta));
+  toast({ kind: 'success', message: `Duplicated “${src.name}”.` });
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  await deleteProjectRecord(id);
+  if (id === editor().project.id) {
+    const rest = await listProjects();
+    if (rest.length > 0) await openProjectById(rest[0].id);
+    else await newProject();
+  }
+  void collectGarbage();
+}
+
+export function renameProject(name: string) {
+  const trimmed = name.trim().slice(0, 120) || 'Untitled project';
+  editor().silent((d) => {
+    d.name = trimmed;
+    d.updatedAt = Date.now();
+  });
+}
+
+/** Delete OPFS media and derived data no longer referenced by any project. */
+export async function collectGarbage(): Promise<void> {
+  if (!(await opfsUsable())) return;
+  try {
+    const projects = await allProjects();
+    const referenced = new Set<string>();
+    const denoised = new Set<string>();
+    for (const p of [...projects, editor().project]) {
+      for (const a of Object.values(p.assets)) {
+        referenced.add(a.id);
+        if (a.audio?.denoise) denoised.add(a.id);
+      }
+    }
+    const cutoff = Date.now() - 10 * 60 * 1000;
+    for (const name of await listFiles(DIRS.media)) {
+      if (referenced.has(name)) continue;
+      const f = await getFile(DIRS.media, name);
+      if (f && f.lastModified > cutoff) continue;
+      await deleteFile(DIRS.media, name);
+      await deleteDerived(name);
+    }
+    for (const name of await listFiles(DIRS.pcm)) {
+      // "<id>.pcm", or "<id>.nr.pcm" for the noise-reduced variant.
+      const [id, variant] = name.split('.');
+      if (variant === 'nr' ? denoised.has(id) : referenced.has(id)) continue;
+      const f = await getFile(DIRS.pcm, name);
+      if (f && f.lastModified > cutoff) continue;
+      await deleteFile(DIRS.pcm, name);
+    }
+    for (const name of await listFiles(DIRS.exports)) {
+      const f = await getFile(DIRS.exports, name);
+      if (f && f.lastModified < Date.now() - 24 * 3600 * 1000) await deleteFile(DIRS.exports, name);
+    }
+  } catch (e) {
+    console.warn('Storage cleanup failed', e);
+  }
+}
+
+export async function bootstrap(): Promise<void> {
+  startAutosave();
+  let opened = false;
+  try {
+    const lastId = await kvGet<string>(LAST_PROJECT_KEY);
+    if (lastId) {
+      const p = await loadProject(lastId);
+      if (p) {
+        await openProject(p);
+        opened = true;
+      }
+    }
+    if (!opened) {
+      const list = await listProjects();
+      if (list.length > 0) {
+        await openProjectById(list[0].id);
+        opened = true;
+      }
+    }
+  } catch (e) {
+    console.error('Could not restore the last project', e);
+    toast({ kind: 'error', message: 'Your last project could not be restored.', detail: String((e as Error).message ?? e) });
+  }
+  if (!opened) await newProject();
+  if (!(await opfsUsable())) {
+    toast({
+      kind: 'warning',
+      message: 'Media can’t be stored in this browser window.',
+      detail: 'This is common in private browsing. You can edit and export normally, but imported files will need to be re-linked after the window is closed.',
+      timeout: 0,
+    });
+  }
+  void requestPersistence();
+  setTimeout(() => void collectGarbage(), 5000);
+}

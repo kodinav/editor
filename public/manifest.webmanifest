@@ -1,0 +1,10 @@
+{
+  "name": "Cutline Video Editor",
+  "short_name": "Cutline",
+  "description": "Private, in-browser video editor. No account required.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0e0f11",
+  "theme_color": "#0e0f11",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

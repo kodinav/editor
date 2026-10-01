@@ -1,0 +1,101 @@
+.export-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius-m);
+  background: var(--bg-2);
+}
+.export-summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+}
+.export-preview {
+  width: 100%;
+  max-height: 46vh;
+  border-radius: var(--radius-m);
+  background: #000;
+}
+.project-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 14px;
+}
+.project-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.project-thumb {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-m);
+  background: #0b0c0e;
+  padding: 0;
+  height: 120px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+.project-card.current .project-thumb {
+  border-color: var(--accent);
+}
+.project-thumb:hover {
+  border-color: var(--line-strong);
+}
+.project-thumb img,
+.project-thumb-empty {
+  max-width: 100%;
+  max-height: 118px;
+  display: block;
+}
+.project-thumb-empty {
+  height: 80px;
+  background: var(--bg-3);
+  border-radius: 3px;
+}
+.shortcut-cols {
+  columns: 2 300px;
+  column-gap: 28px;
+}
+.shortcut-cols section {
+  break-inside: avoid;
+  margin-bottom: 8px;
+}
+.shortcut-list {
+  margin: 0;
+}
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 4px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12.5px;
+}
+.shortcut-row dt {
+  color: var(--text-2);
+}
+.shortcut-row dd {
+  margin: 0;
+  white-space: nowrap;
+}
+.unsupported {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  text-align: center;
+}
+.unsupported .card {
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+.spin-slow {
+  animation: spin 1.4s linear infinite;
+}

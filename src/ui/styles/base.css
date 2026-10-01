@@ -1,0 +1,165 @@
+/* ------------------------------------------------------------------ */
+/* Design tokens                                                        */
+/* ------------------------------------------------------------------ */
+:root {
+  --bg-0: #0e0f11;
+  --bg-1: #16171a;
+  --bg-2: #1d1f23;
+  --bg-3: #25282d;
+  --bg-4: #2e3137;
+  --line: #2a2d33;
+  --line-strong: #3a3e46;
+  --text-1: #eceef2;
+  --text-2: #a9aeb8;
+  --text-3: #8b919c;
+  --accent: #5c7cfa;
+  --accent-hover: #7590ff;
+  --accent-soft: rgba(92, 124, 250, 0.16);
+  --accent-text: #9db1ff;
+  --danger: #f2555a;
+  --warning: #f2b544;
+  --success: #3ecf8e;
+  --playhead: #ff5c5c;
+  --focus: #8ea6ff;
+
+  --clip-video: #36598f;
+  --clip-audio: #2a7457;
+  --clip-image: #5f4a99;
+  --clip-text: #9a5b31;
+  --clip-shape: #84436d;
+  --clip-adjustment: #535a66;
+  --clip-caption: #9c7b25;
+
+  --radius-s: 4px;
+  --radius-m: 6px;
+  --radius-l: 10px;
+  --shadow-pop: 0 10px 30px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06);
+  --font-ui: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Roboto Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --topbar-h: 48px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg-0);
+  color: var(--text-1);
+  font-family: var(--font-ui);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea,
+[contenteditable] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+button {
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Thin, unobtrusive scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg-4) transparent;
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bg-4);
+  border-radius: 10px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.muted {
+  color: var(--text-2);
+}
+
+.subtle {
+  color: var(--text-3);
+}
+
+.grow {
+  flex: 1;
+  min-width: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
+}
