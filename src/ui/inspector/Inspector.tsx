@@ -233,7 +233,9 @@ function CaptionClipSection({ clipId }: { clipId: string }) {
                 if (c?.type === 'caption') {
                   c.text = v;
                   c.name = v.slice(0, 40);
-                  c.words = undefined;
+                  // Corrections that keep the word count keep the word timing (karaoke highlight).
+                  const tokens = v.split(/\s+/).filter(Boolean);
+                  c.words = c.words && tokens.length === c.words.length ? c.words.map((w, i) => ({ ...w, text: tokens[i] })) : undefined;
                 }
               },
               { coalesce: `caption:${clipId}` },
@@ -427,6 +429,7 @@ function ProjectInspector() {
                   commit('Change format', (d) => {
                     d.settings.width = p.width;
                     d.settings.height = p.height;
+                    d.settings.chosen = true;
                   });
               }}
             >
@@ -441,8 +444,8 @@ function ProjectInspector() {
             </select>
           </Row>
           <div className="xy-row">
-            <NumberField label="W" value={width} min={16} max={7680} step={2} unit="px" onChange={(v) => commit('Change size', (d) => void (d.settings.width = Math.round(v / 2) * 2))} />
-            <NumberField label="H" value={height} min={16} max={7680} step={2} unit="px" onChange={(v) => commit('Change size', (d) => void (d.settings.height = Math.round(v / 2) * 2))} />
+            <NumberField label="W" value={width} min={16} max={7680} step={2} unit="px" onChange={(v) => commit('Change size', (d) => void ((d.settings.width = Math.round(v / 2) * 2), (d.settings.chosen = true)))} />
+            <NumberField label="H" value={height} min={16} max={7680} step={2} unit="px" onChange={(v) => commit('Change size', (d) => void ((d.settings.height = Math.round(v / 2) * 2), (d.settings.chosen = true)))} />
           </div>
           <Row label="Frame rate">
             <select className="select" aria-label="Frame rate" value={fps} onChange={(e) => commit('Change frame rate', (d) => void (d.settings.fps = Number(e.target.value)))}>

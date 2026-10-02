@@ -66,6 +66,10 @@ export class ProjectValidationError extends Error {}
 
 /** Validate untrusted input and upgrade it to the current schema. */
 export function parseProject(raw: unknown): Project {
+  const version = (raw as { schemaVersion?: unknown } | null)?.schemaVersion;
+  if (typeof version === 'number' && version > PROJECT_SCHEMA_VERSION) {
+    throw new ProjectValidationError('This project was saved by a newer version of Cutline. Reload the page to update, then open it again.');
+  }
   const res = projectSchema.safeParse(raw);
   if (!res.success) {
     const issue = res.error.issues[0];

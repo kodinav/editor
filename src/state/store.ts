@@ -95,6 +95,20 @@ export interface EditorState {
 
 let toastSeq = 1;
 
+/** The name of a locked track whose clips `after` changes, if any. */
+function lockedTrackTouched(before: Project, after: Project): string | null {
+  const locked = new Map(before.tracks.filter((t) => t.locked).map((t) => [t.id, t.name]));
+  if (!locked.size || before.clips === after.clips) return null;
+  for (const id of new Set([...Object.keys(before.clips), ...Object.keys(after.clips)])) {
+    const a = before.clips[id];
+    const b = after.clips[id];
+    if (a === b) continue;
+    const hit = (a && locked.get(a.trackId)) || (b && locked.get(b.trackId));
+    if (hit) return hit;
+  }
+  return null;
+}
+
 /** Edits with the same coalesce key this close together share an undo step. */
 const COALESCE_MS = 1500;
 let coalescing: { key: string; at: number } | null = null;
@@ -185,6 +199,12 @@ export const useEditor = create<EditorState>()((set, get) => ({
     }
     const next = apply(project);
     if (next === project) return;
+    // Locked tracks are protected here, whatever the edit came from (inspector, tools, shortcuts).
+    const locked = lockedTrackTouched(project, next);
+    if (locked) {
+      get().toast({ kind: 'warning', message: `“${locked}” is locked. Unlock the track to change its clips.` });
+      return;
+    }
     const now = Date.now();
     const merge = !!opts.coalesce && coalescing?.key === opts.coalesce && now - coalescing.at < COALESCE_MS && past.length > 0;
     coalescing = opts.coalesce ? { key: opts.coalesce, at: now } : null;
@@ -238,6 +258,11 @@ export const useEditor = create<EditorState>()((set, get) => ({
       normalize(d);
       d.updatedAt = Date.now();
     });
+    const locked = lockedTrackTouched(base, next);
+    if (locked) {
+      get().toast({ kind: 'warning', message: `“${locked}” is locked. Unlock the track to change its clips.` });
+      return;
+    }
     set({ project: next, saveState: 'unsaved' });
   },
 
@@ -319,6 +344,9 @@ export const useEditor = create<EditorState>()((set, get) => ({
   },
 
   toast(t) {
+    // The same message already on screen isn't repeated (e.g. typing into a locked clip).
+    const same = get().toasts.find((x) => x.message === t.message);
+    if (same) return same.id;
     const id = toastSeq++;
     const timeout = t.timeout ?? (t.kind === 'error' ? 8000 : 4000);
     set({ toasts: [...get().toasts.slice(-4), { ...t, id, timeout }] });

@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Download, FileText, Plus, Trash2, Upload, Wand2 } from 'lucide-react';
 import { chunkTranscript, toSRT, toVTT } from '@/core/captions';
-import { addTrack, makeRoomFor, q } from '@/core/ops';
+import { addTrack, frameCues, makeRoomFor } from '@/core/ops';
 import { clipsOnTrack, createCaptionClip, scaledCaptionStyle } from '@/core/project';
 import { formatTimecode } from '@/core/time';
 import type { CaptionClip } from '@/core/types';
@@ -16,7 +16,10 @@ import { AutoCaptions } from './AutoCaptions';
 export function CaptionsPanel() {
   const project = useEditor((s) => s.project);
   const selection = useEditor((s) => s.selection);
-  const track = project.tracks.find((t) => t.kind === 'caption');
+  const selectedTrackId = useEditor((s) => s.selectedTrackId);
+  // The panel works on one caption track at a time: the selected one, else the first.
+  const captionTracks = project.tracks.filter((t) => t.kind === 'caption');
+  const track = captionTracks.find((t) => t.id === selectedTrackId) ?? captionTracks[0];
   const captions = useMemo(() => (track ? (clipsOnTrack(project, track.id) as CaptionClip[]) : []), [project, track]);
   const [pasting, setPasting] = useState(false);
   const [auto, setAuto] = useState(false);
@@ -34,14 +37,14 @@ export function CaptionsPanel() {
     const cues = chunkTranscript(transcript, time);
     if (!cues.length) return;
     editor().commit('Add captions', (d) => {
-      let t = d.tracks.find((x) => x.kind === 'caption');
+      let t = d.tracks.find((x) => x.id === track?.id);
       if (!t) {
         t = addTrack(d, 'caption');
         t.captionStyle = scaledCaptionStyle(d.settings.height);
       }
       const ids: string[] = [];
-      for (const c of cues) {
-        const clip = createCaptionClip({ trackId: t.id, start: q(d, c.start), duration: q(d, c.end - c.start) }, c.text);
+      for (const c of frameCues(d, cues)) {
+        const clip = createCaptionClip({ trackId: t.id, start: c.qStart, duration: c.qEnd - c.qStart }, c.text);
         d.clips[clip.id] = clip;
         ids.push(clip.id);
       }
@@ -63,6 +66,18 @@ export function CaptionsPanel() {
       </PanelHead>
       {auto && <AutoCaptions onClose={() => setAuto(false)} />}
       <div className="panel-body">
+        {captionTracks.length > 1 && (
+          <label className="field" style={{ marginBottom: 10 }}>
+            <span className="label">Track</span>
+            <select className="select" aria-label="Caption track" value={track?.id} onChange={(e) => editor().set('selectedTrackId', e.target.value)}>
+              {captionTracks.map((t) => (
+                <option key={t.id} value={t.id}>
+                  {t.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {captions.length === 0 && !pasting && !auto && (
           <div className="col">
             <p className="panel-hint" style={{ marginTop: 0 }}>

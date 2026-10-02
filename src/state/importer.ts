@@ -1,6 +1,6 @@
 import { uid } from '@/core/ids';
 import { parseSubtitles } from '@/core/captions';
-import { addTrack, findOrCreateTrack, makeRoomFor, q } from '@/core/ops';
+import { addTrack, findOrCreateTrack, frameCues, makeRoomFor, q } from '@/core/ops';
 import {
   clipEnd,
   createAudioClip,
@@ -40,6 +40,22 @@ function fontFamilyFromFile(name: string): string {
   return name.replace(/\.(ttf|otf|woff2?|)$/i, '').replace(/[-_]+/g, ' ').replace(/["\\]/g, '').trim().slice(0, 60) || 'Custom font';
 }
 
+/**
+ * The file's audio can't be decoded: a video carries on silent, an audio file
+ * is marked as failed. Either way nothing waits on audio that will never come.
+ */
+export function audioUnusable(id: string, reason: string) {
+  const a = editor().project.assets[id];
+  if (!a) return;
+  if (a.kind === 'audio') {
+    updateAsset(id, { status: 'error', error: `The audio could not be decoded. ${reason}` });
+    toast({ kind: 'error', message: `“${a.name}” could not be decoded.`, detail: reason });
+  } else {
+    updateAsset(id, { audio: undefined });
+    toast({ kind: 'warning', message: `Audio in “${a.name}” could not be decoded; the video will be silent.`, detail: reason });
+  }
+}
+
 function updateAsset(id: string, patch: Partial<Asset>) {
   editor().silent((d) => {
     const a = d.assets[id];
@@ -52,7 +68,8 @@ function normalizeFps(fps: number): number {
   const common = [23.976, 24, 25, 29.97, 30, 48, 50, 59.94, 60];
   let best = 30;
   for (const c of common) if (Math.abs(c - fps) < Math.abs(best - fps)) best = c;
-  return Math.abs(best - fps) < 0.6 ? best : Math.round(fps);
+  // Variable-rate phone footage averages odd values; slow-motion runs at 120/240 fps.
+  return Math.abs(best - fps) < 0.6 ? best : fps > 60 ? 60 : 30;
 }
 
 async function prepareAsset(file: File, kind: Asset['kind']): Promise<{ asset: Asset; file: File; warnings: string[] } | null> {
@@ -161,7 +178,7 @@ async function startBackgroundWork(asset: Asset, file: File) {
         // A relinked file may differ from the one its cleaned audio was made from.
         await restoreNoiseReduction(id, true);
       } else if (res.audioError) {
-        toast({ kind: 'warning', message: `Audio in “${asset.name}” could not be decoded.`, detail: res.audioError });
+        audioUnusable(id, res.audioError);
       }
       if (res.peaks) {
         const pk = { assetId: id, rate: res.peaks.rate, data: res.peaks.data };
@@ -242,16 +259,17 @@ async function importSubtitles(file: File) {
     return;
   }
   editor().commit('Import captions', (d) => {
-    let track = d.tracks.find((t) => t.kind === 'caption');
+    // Into an empty caption track if there is one; otherwise its own track (e.g. a second language).
+    let track = d.tracks.find((t) => t.kind === 'caption' && !Object.values(d.clips).some((c) => c.trackId === t.id));
     if (!track) {
       track = addTrack(d, 'caption');
+      track.name = file.name.replace(/\.(srt|vtt)$/i, '').slice(0, 60) || track.name;
       track.captionStyle = scaledCaptionStyle(d.settings.height);
     }
-    for (const c of cues) {
-      const clip = createCaptionClip({ trackId: track.id, start: q(d, c.start), duration: Math.max(q(d, c.end - c.start), 1 / d.settings.fps) }, c.text);
+    for (const c of frameCues(d, cues)) {
+      const clip = createCaptionClip({ trackId: track.id, start: c.qStart, duration: c.qEnd - c.qStart }, c.text);
       d.clips[clip.id] = clip;
     }
-    makeRoomFor(d, Object.values(d.clips).filter((c) => c.trackId === track!.id).map((c) => c.id), 'overwrite');
   });
   toast({ kind: 'success', message: `Imported ${cues.length} captions from “${file.name}”.` });
 }
@@ -289,8 +307,8 @@ export async function importFiles(files: File[], opts: ImportOptions = {}): Prom
     for (const f of projectFiles) await importProjectPackage(f);
   }
 
-  // Smart default: the first footage in an empty project defines its format.
-  if (wasEmpty && firstVideo?.video && !opts.place) {
+  // Smart default: the first footage in an empty project defines its format (unless the user chose one).
+  if (wasEmpty && firstVideo?.video && !opts.place && !editor().project.settings.chosen) {
     const v = firstVideo.video;
     const rotated = v.rotation === 90 || v.rotation === 270;
     let w = rotated ? v.height : v.width;
@@ -302,7 +320,7 @@ export async function importFiles(files: File[], opts: ImportOptions = {}): Prom
     const fps = normalizeFps(v.fps);
     const cur = editor().project.settings;
     if (cur.width !== w || cur.height !== h || cur.fps !== fps) {
-      editor().silent((d) => {
+      editor().commit('Match footage format', (d) => {
         d.settings.width = w;
         d.settings.height = h;
         d.settings.fps = fps;

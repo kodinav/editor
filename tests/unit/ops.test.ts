@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { produce } from 'immer';
-import { createProject, createVideoClip, createImageClip, createTextClip, clipsOnTrack } from '../../src/core/project';
+import { createProject, createVideoClip, createImageClip, createTextClip, createCaptionClip, clipsOnTrack } from '../../src/core/project';
 import {
   clearRange,
   closeGapAt,
@@ -14,6 +14,8 @@ import {
   trimStart,
   splitAt,
   detachAudio,
+  duplicateClips,
+  frameCues,
 } from '../../src/core/ops';
 import { evaluateFrame } from '../../src/core/evaluate';
 import { upsertKeyframe, evalProp } from '../../src/core/keyframes';
@@ -300,5 +302,70 @@ describe('evaluate', () => {
     const f1 = evaluateFrame(p, 1.5);
     expect(f0.layers[0].type === 'clip' && f0.layers[0].opacity).toBeCloseTo(0);
     expect(f1.layers[0].type === 'clip' && f1.layers[0].opacity).toBeCloseTo(1);
+  });
+});
+
+describe('duplicate and detach', () => {
+  it('duplicate pushes the following clips later instead of covering them', () => {
+    const { p, v1 } = setup();
+    const a = addVideo(p, v1, 0, 2);
+    addVideo(p, v1, 2, 2, 5);
+    const next = produce(p, (d) => {
+      duplicateClips(d, [a.id]);
+    });
+    const onTrack = clipsOnTrack(next, v1).map((c) => [c.start, c.duration, (c as VideoClip).sourceIn]);
+    expect(onTrack).toEqual([
+      [0, 2, 0],
+      [2, 2, 0],
+      [4, 2, 5], // b intact, just later
+    ]);
+  });
+
+  it('detaching audio twice does not duplicate the soundtrack', () => {
+    const { p, v1 } = setup();
+    const v = addVideo(p, v1, 0, 3);
+    const next = produce(p, (d) => {
+      expect(detachAudio(d, v.id)).not.toBeNull();
+      expect(detachAudio(d, v.id)).toBeNull();
+    });
+    expect(Object.values(next.clips).filter((c) => c.type === 'audio')).toHaveLength(1);
+  });
+});
+
+describe('captions', () => {
+  it('splitting a caption divides its text instead of copying it', () => {
+    const p = createProject('t');
+    const tr = p.tracks.find((t) => t.kind === 'video')!.id;
+    const c = createCaptionClip({ trackId: tr, start: 0, duration: 4 }, 'one two three four');
+    p.clips[c.id] = c;
+    const next = produce(p, (d) => void splitClip(d, c.id, 2));
+    expect(Object.values(next.clips).map((x) => (x as { text: string }).text).sort()).toEqual(['one two', 'three four']);
+  });
+
+  it('with word timing, each half keeps the words spoken in it', () => {
+    const p = createProject('t');
+    const tr = p.tracks.find((t) => t.kind === 'video')!.id;
+    const c = createCaptionClip({ trackId: tr, start: 0, duration: 4 }, 'a b c');
+    c.words = [
+      { text: 'a', start: 0, end: 1 },
+      { text: 'b', start: 1.2, end: 1.8 },
+      { text: 'c', start: 3, end: 3.5 },
+    ];
+    p.clips[c.id] = c;
+    const next = produce(p, (d) => void splitClip(d, c.id, 2));
+    const parts = Object.values(next.clips).sort((a, b) => a.start - b.start) as { text: string; words: { start: number }[] }[];
+    expect(parts.map((x) => x.text)).toEqual(['a b', 'c']);
+    expect(parts[1].words[0].start).toBeCloseTo(1, 6);
+  });
+
+  it('frame-aligned cues never overlap their neighbours', () => {
+    const p = createProject('t'); // 30 fps
+    const cues = [
+      { start: 0.01, end: 1.016 },
+      { start: 1.01, end: 2.5 },
+      { start: 2.49, end: 2.6 },
+    ];
+    const out = frameCues(p, cues);
+    for (let i = 1; i < out.length; i++) expect(out[i].qStart).toBeGreaterThanOrEqual(out[i - 1].qEnd - 1e-9);
   });
 });

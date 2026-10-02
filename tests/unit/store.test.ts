@@ -103,3 +103,21 @@ describe('editor history', () => {
     expect(s().project.assets.a1?.stored).toBe(false); // newer metadata is never rolled back
   });
 });
+
+describe('track lock', () => {
+  it('no edit can change clips on a locked track, from any path', () => {
+    const id = fresh();
+    const trackId = s().project.clips[id].trackId;
+    s().commit('Lock', (d) => void (d.tracks.find((t) => t.id === trackId)!.locked = true));
+    const before = s().project.clips[id];
+    s().commit('Edit text', (d) => void ((d.clips[id] as { text: string }).text = 'changed'));
+    s().commit('Delete', (d) => void delete d.clips[id]);
+    s().beginGesture('Opacity');
+    s().updateGesture((d) => void ((d.clips[id] as { transform: { opacity: number } }).transform.opacity = 0.2));
+    s().endGesture();
+    expect(s().project.clips[id]).toBe(before);
+    s().commit('Unlock', (d) => void (d.tracks.find((t) => t.id === trackId)!.locked = false));
+    s().commit('Edit text', (d) => void ((d.clips[id] as { text: string }).text = 'changed'));
+    expect(text(id)).toBe('changed');
+  });
+});

@@ -28,7 +28,7 @@ import {
   Pencil,
 } from 'lucide-react';
 import { addTrack, nextAdjacent, removeTrack, reorderTrack, setSpeed } from '@/core/ops';
-import { clipEnd, projectDuration } from '@/core/project';
+import { clipEnd, projectDuration, scaledCaptionStyle } from '@/core/project';
 import { createEffect } from '@/core/effects';
 import type { Clip, Track } from '@/core/types';
 import { isVisualClip } from '@/core/types';
@@ -450,7 +450,15 @@ function Toolbar({ compact }: { compact?: boolean }) {
             [
               { label: 'Video track', icon: <Film size={14} />, onClick: () => editor().commit('Add track', (d) => void addTrack(d, 'video')) },
               { label: 'Audio track', icon: <AudioLines size={14} />, onClick: () => editor().commit('Add track', (d) => void addTrack(d, 'audio')) },
-              { label: 'Caption track', icon: <Captions size={14} />, onClick: () => A.addCaptionAt() },
+              {
+                label: 'Caption track',
+                icon: <Captions size={14} />,
+                onClick: () =>
+                  editor().commit('Add track', (d) => {
+                    const t = addTrack(d, 'caption');
+                    t.captionStyle = scaledCaptionStyle(d.settings.height);
+                  }),
+              },
             ],
             'right',
           )

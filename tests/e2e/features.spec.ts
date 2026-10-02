@@ -550,3 +550,96 @@ test('every clip can be selected from the keyboard, including stacked ones', asy
   await page.keyboard.press('Delete');
   expect((await state(page)).clips.map((c) => c.type).sort()).toEqual(['text', 'video']);
 });
+
+test('keys go where users expect: Escape closes dialogs, Space plays after clicking a button, undo works from a slider', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4']);
+  await waitForMediaReady(page);
+  await selectFirst(page, 'video');
+  await page.keyboard.press('ControlOrMeta+e');
+  await expect(page.getByRole('dialog')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  expect((await state(page)).selection).toHaveLength(1); // Escape closed the dialog, not the selection
+
+  await page.keyboard.press('m'); // two undoable steps
+  await page.keyboard.press('m');
+  const before = (await state(page)).past;
+  await page.getByRole('button', { name: /^Undo/ }).click();
+  await page.keyboard.press('Space'); // plays; doesn't press Undo again
+  await page.waitForFunction(() => (window as any).__cutline.playback.getState().playing);
+  await page.keyboard.press('Space');
+  expect((await state(page)).past).toBe(before - 1);
+
+  await page.getByRole('tab', { name: 'Video', exact: true }).click();
+  const slider = page.getByRole('slider', { name: 'Opacity' }).first();
+  await slider.focus();
+  await page.keyboard.press('ArrowLeft'); // an edit from the slider
+  const opacity = () => page.evaluate(() => {
+    const s = (window as any).__cutline.editor.getState();
+    return s.project.clips[s.selection[0]].transform.opacity;
+  });
+  expect(await opacity()).toBeLessThan(1);
+  await page.keyboard.press('ControlOrMeta+z'); // reaches the app while the slider has focus
+  expect(await opacity()).toBe(1);
+});
+
+test('a typed value lands on the clip it was typed for, and just tabbing through fields changes nothing', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t'); // clip A at 0
+  await seek(page, 6);
+  await page.keyboard.press('t'); // clip B at 6
+  const [a, b] = (await state(page)).clips.map((c) => c.id);
+  await page.evaluate((id) => (window as any).__cutline.editor.getState().select([id]), a);
+  const x = page.locator('.xy-field').first().getByRole('textbox', { name: 'X' });
+  const past = (await state(page)).past;
+  await x.focus();
+  await x.blur(); // focus and leave: no edit, no undo step
+  expect((await state(page)).past).toBe(past);
+  await x.fill('123');
+  await page.locator(`[data-clip="${b}"]`).click(); // select B before the field commits
+  const xs = await page.evaluate(([a, b]) => {
+    const c = (window as any).__cutline.editor.getState().project.clips;
+    return [c[a].transform.x, c[b].transform.x];
+  }, [a, b]);
+  expect(xs).toEqual([123, 0]);
+});
+
+test('a colour background added over footage goes underneath it', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4']);
+  await waitForMediaReady(page);
+  await seek(page, 1);
+  await page.getByRole('tab', { name: 'Elements' }).click();
+  await page.getByRole('button', { name: /^Add .* background$/ }).first().click();
+  const s = await state(page);
+  const index = (type: string) => s.tracks.findIndex((t) => t.id === s.clips.find((c) => c.type === type).trackId);
+  expect(index('shape')).toBeGreaterThan(index('video')); // tracks are listed top to bottom
+});
+
+test('a format picked before importing is kept', async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole('group', { name: 'Canvas format' }).getByRole('button').nth(1).click();
+  const chosen = (await state(page)).settings;
+  expect(chosen.chosen).toBe(true);
+  await importFiles(page, ['landscape.mp4']);
+  await waitForMediaReady(page);
+  const s = (await state(page)).settings;
+  expect([s.width, s.height]).toEqual([chosen.width, chosen.height]);
+});
+
+test('a video transition crossfades the sound instead of dipping it to silence', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['red.mp4']); // a steady tone
+  await waitForMediaReady(page);
+  await seek(page, 1.5);
+  await page.keyboard.press('s');
+  await commit(page, (d) => {
+    const a: any = (Object.values(d.clips) as any[]).sort((x, y) => x.start - y.start)[0];
+    a.transitionOut = { type: 'crossfade', duration: 1 };
+  });
+  const file = await exportVia(page, out('xfade.mp4'));
+  const steady = meanVolume(file, 0.3, 0.6);
+  const atCut = meanVolume(file, 1.4, 0.2);
+  expect(atCut).toBeGreaterThan(steady - 3);
+});

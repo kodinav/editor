@@ -108,6 +108,7 @@ function PreviewHeader() {
                 editor().commit('Change format', (d) => {
                   d.settings.width = p.width;
                   d.settings.height = p.height;
+                  d.settings.chosen = true;
                 }),
             })),
             { kind: 'separator' },
@@ -212,6 +213,7 @@ function EmptyState() {
                 editor().commit('Change format', (d) => {
                   d.settings.width = p.width;
                   d.settings.height = p.height;
+                  d.settings.chosen = true;
                 })
               }
             >

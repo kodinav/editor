@@ -2,7 +2,7 @@ import { produce } from 'immer';
 import { uid } from '@/core/ids';
 import { createProject, projectDuration } from '@/core/project';
 import { migrateProject } from '@/core/schema';
-import type { Project, ProjectSettings } from '@/core/types';
+import { PROJECT_SCHEMA_VERSION, type Project, type ProjectSettings } from '@/core/types';
 import { analysis } from '@/media/analysis';
 import { customFontFamilies, registerCustomFont, unregisterCustomFont } from '@/engine/fonts';
 import { media } from '@/media/registry';
@@ -22,6 +22,7 @@ import {
 } from '@/storage/db';
 import { deleteFile, DIRS, getFile, listFiles, opfsUsable, requestPersistence } from '@/storage/opfs';
 import { restoreNoiseReduction } from './denoiseTools';
+import { audioUnusable } from './importer';
 import { editor, toast, useEditor, usePlayback } from './store';
 
 /**
@@ -251,12 +252,17 @@ function repairDerivedData(ids: string[]) {
           media.setPeaks(id, pk);
         }
       })
-      .catch((e) => console.warn('Audio repair failed', e))
+      .catch((e) => audioUnusable(id, String((e as Error)?.message ?? e)))
       .finally(() => media.setProgress(id, null));
   }
 }
 
 export async function openProject(p: Project, opts: { keepLock?: boolean } = {}): Promise<void> {
+  if ((p.schemaVersion ?? 0) > PROJECT_SCHEMA_VERSION) {
+    // Opening it here would drop whatever the newer version added; leave it untouched.
+    toast({ kind: 'error', message: `“${p.name}” was saved by a newer version of Cutline.`, detail: 'Reload the page to update the app, then open it again.', timeout: 0 });
+    return;
+  }
   await flushSave();
   player.pause();
   media.reset();
@@ -370,9 +376,11 @@ export async function collectGarbage(): Promise<void> {
       if (f && f.lastModified > cutoff) continue;
       await deleteFile(DIRS.pcm, name);
     }
+    // Rendered exports are temporary; anything older than a few minutes is left over from an
+    // earlier session (or one still downloading right now, which gets those minutes).
     for (const name of await listFiles(DIRS.exports)) {
       const f = await getFile(DIRS.exports, name);
-      if (f && f.lastModified < Date.now() - 24 * 3600 * 1000) await deleteFile(DIRS.exports, name);
+      if (f && f.lastModified < Date.now() - 10 * 60 * 1000) await deleteFile(DIRS.exports, name);
     }
   } catch (e) {
     console.warn('Storage cleanup failed', e);
@@ -388,7 +396,7 @@ export async function bootstrap(): Promise<void> {
       const p = await loadProject(lastId);
       if (p) {
         await openProject(p);
-        opened = true;
+        opened = editor().project.id === p.id;
       }
     }
     if (!opened) {

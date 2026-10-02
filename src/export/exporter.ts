@@ -1,7 +1,8 @@
+import { startBusy, withWakeLock } from '@/state/busy';
 import { uid } from '@/core/ids';
 import type { Project } from '@/core/types';
 import { media } from '@/media/registry';
-import { DIRS, getFile } from '@/storage/opfs';
+import { deleteFile, DIRS, getFile } from '@/storage/opfs';
 import type { ExportOptions, ExportStartMessage, ExportWorkerMessage } from './types';
 
 /**
@@ -25,6 +26,8 @@ export interface ExportResult {
   elapsed: number;
   videoCodec: string | null;
   audioCodec: string | null;
+  /** Delete the rendered file from browser storage once it has been downloaded. */
+  discard?: () => void;
 }
 
 export class ExportError extends Error {}
@@ -43,7 +46,11 @@ export function preflight(p: Project, o: ExportOptions): string[] {
     else if (a.status === 'error') issues.push(`“${a.name}” could not be decoded.`);
     else if (o.includeAudio && a.audio && !a.audio.conformed) {
       const p2 = media.getProgress(id);
-      issues.push(`Audio for “${a.name}” is still being prepared${p2 ? ` (${Math.round(p2.value * 100)}%)` : ''}. Try again in a moment.`);
+      issues.push(
+        p2
+          ? `Audio for “${a.name}” is still being prepared (${Math.round(p2.value * 100)}%). Try again in a moment.`
+          : `Audio for “${a.name}” isn’t ready. Reload the page to prepare it again, or export without audio.`,
+      );
     }
   }
   if (o.end - o.start <= 0) issues.push('The timeline is empty — add some media first.');
@@ -58,7 +65,8 @@ export function runExport(
 ): { promise: Promise<ExportResult>; cancel: () => void } {
   const worker = new Worker(new URL('../workers/export.worker.ts', import.meta.url), { type: 'module', name: 'export' });
   let cancel = () => {};
-  const promise = (async () => {
+  const done = startBusy('an export');
+  const promise = withWakeLock(async () => {
     const files: ExportStartMessage['files'] = {};
     const pcm: ExportStartMessage['pcm'] = {};
     const fonts: ExportStartMessage['fonts'] = {};
@@ -83,7 +91,17 @@ export function runExport(
         if (m.type === 'progress') onProgress(m);
         else if (m.type === 'done') {
           const file = handle ? null : m.buffer ? new File([m.buffer], options.fileName, { type: m.mimeType.split(';')[0] }) : await getFile(DIRS.exports, opfsName);
-          resolve({ file, savedToDisk: !!handle, bytes: m.bytes, elapsed: m.elapsed, videoCodec: m.videoCodec, audioCodec: m.audioCodec });
+          const stored = !handle && !m.buffer;
+          resolve({
+            file,
+            savedToDisk: !!handle,
+            bytes: m.bytes,
+            elapsed: m.elapsed,
+            videoCodec: m.videoCodec,
+            audioCodec: m.audioCodec,
+            // A download in progress still reads the file: give it time before deleting.
+            discard: stored ? () => void setTimeout(() => void deleteFile(DIRS.exports, opfsName).catch(() => {}), 120_000) : undefined,
+          });
         } else if (m.type === 'cancelled') reject(new ExportError('cancelled'));
         else if (m.type === 'error') reject(new ExportError(m.message));
       };
@@ -91,6 +109,9 @@ export function runExport(
       const msg: ExportStartMessage = { type: 'start', project, files, pcm, fonts, options, target };
       worker.postMessage(msg);
     });
-  })().finally(() => worker.terminate());
+  }).finally(() => {
+    worker.terminate();
+    done();
+  });
   return { promise, cancel: () => cancel() };
 }

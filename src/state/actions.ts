@@ -8,7 +8,6 @@ import {
   deleteClips,
   detachAudio,
   duplicateClips,
-  findOrCreateTrack,
   makeRoomFor,
   maxTransitionDuration,
   nextAdjacent,
@@ -223,12 +222,24 @@ function revealAfterIntro(id: string) {
   }
 }
 
+/** A track for a full-frame background: below every layer that is visible in [start, end). */
+function backgroundTrack(d: Project, start: number, end: number): string {
+  const free = (id: string) => clipsOnTrack(d, id).every((c) => clipEnd(c) <= start + 1e-6 || c.start >= end - 1e-6);
+  const vids = d.tracks.filter((t) => t.kind === 'video');
+  let pick: string | null = null;
+  // From the bottom up, as long as nothing below is in the way.
+  for (let i = vids.length - 1; i >= 0 && free(vids[i].id); i--) if (!vids[i].locked) pick = vids[i].id;
+  if (pick) return pick;
+  const lastVideo = d.tracks.map((t) => t.kind).lastIndexOf('video');
+  return addTrack(d, 'video', lastVideo + 1).id;
+}
+
 export function addShape(kind: ShapeKind, opts: { fullFrame?: boolean; fill?: string; fill2?: string | null } = {}) {
   const at = now();
   let id: string | null = null;
   editor().commit('Add shape', (d) => {
     const dur = 5;
-    const trackId = opts.fullFrame ? findOrCreateTrack(d, 'video', at, at + dur, d.tracks.filter((t) => t.kind === 'video').at(-1)?.id).id : topFreeVideoTrack(d, at, at + dur);
+    const trackId = opts.fullFrame ? backgroundTrack(d, at, at + dur) : topFreeVideoTrack(d, at, at + dur);
     const k = Math.min(d.settings.width, d.settings.height) / 1080;
     const c = createShapeClip({ trackId, start: q(d, at), duration: dur }, kind, {
       width: opts.fullFrame ? d.settings.width : Math.round((kind === 'line' ? 600 : kind === 'arrow' ? 420 : 360) * k),
@@ -309,7 +320,10 @@ export function detachAudioSelection() {
   editor().commit('Detach audio', (d) => {
     for (const id of ids) if (detachAudio(d, id)) n++;
   });
-  if (n === 0) toast({ kind: 'info', message: 'The selected clip has no audio.' });
+  if (n === 0) {
+    const muted = ids.some((id) => (editor().project.clips[id] as VideoClip).muted);
+    toast({ kind: 'info', message: muted ? 'This clip’s audio is already detached or muted.' : 'The selected clip has no audio.' });
+  }
 }
 
 /** Add (or replace) a transition at the cut after `clipId`. */

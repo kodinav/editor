@@ -20,13 +20,14 @@ export default function SettingsDialog({ mode }: { mode: 'new' | 'edit' }) {
 
   const apply = async () => {
     if (mode === 'new') {
-      await newProject({ width: even(w), height: even(h), fps, background: bg }, name.trim() || undefined);
+      await newProject({ width: even(w), height: even(h), fps, background: bg, chosen: true }, name.trim() || undefined);
     } else {
       editor().commit('Project settings', (d) => {
         d.settings.width = even(w);
         d.settings.height = even(h);
         d.settings.fps = fps;
         d.settings.background = bg;
+        d.settings.chosen = true;
       });
       if (name.trim() && name !== projectName) editor().silent((d) => void (d.name = name.trim().slice(0, 120)));
     }

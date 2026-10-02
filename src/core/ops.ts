@@ -83,10 +83,24 @@ export function splitClip(p: Project, clipId: ID, t: number): ID | null {
     c.animOut = { ...c.animOut, preset: 'none' };
     c.transitionOut = undefined;
   }
-  if (right.type === 'caption' && c.type === 'caption' && c.words) {
-    const words = c.words;
-    c.words = words.filter((w) => w.start < offset);
-    right.words = words.filter((w) => w.start >= offset).map((w) => ({ ...w, start: w.start - offset, end: w.end - offset }));
+  if (right.type === 'caption' && c.type === 'caption') {
+    // Each half keeps the words spoken in it (by timing when known, else in proportion to time).
+    if (c.words?.length) {
+      const words = c.words;
+      c.words = words.filter((w) => w.start < offset);
+      right.words = words.filter((w) => w.start >= offset).map((w) => ({ ...w, start: w.start - offset, end: w.end - offset }));
+      c.text = c.words.map((w) => w.text).join(' ').trim() || c.text;
+      right.text = right.words.map((w) => w.text).join(' ').trim() || right.text;
+    } else {
+      const tokens = c.text.split(/\s+/).filter(Boolean);
+      if (tokens.length > 1) {
+        const k = Math.min(tokens.length - 1, Math.max(1, Math.round((tokens.length * offset) / (offset + right.duration))));
+        c.text = tokens.slice(0, k).join(' ');
+        right.text = tokens.slice(k).join(' ');
+      }
+    }
+    c.name = c.text.slice(0, 40);
+    right.name = right.text.slice(0, 40);
   }
   p.clips[right.id] = right;
   return right.id;
@@ -402,7 +416,8 @@ export function enforceTrackSections(p: Project): void {
 /** Move a video clip's audio to its own clip on an audio track and mute the original. */
 export function detachAudio(p: Project, clipId: ID): ID | null {
   const c = p.clips[clipId];
-  if (!c || c.type !== 'video') return null;
+  // A muted video clip has no audio to detach (its sound was already detached or turned off).
+  if (!c || c.type !== 'video' || c.muted) return null;
   const asset = p.assets[c.assetId];
   if (!asset?.audio) return null;
   const track = findOrCreateTrack(p, 'audio', c.start, clipEnd(c));
@@ -416,6 +431,7 @@ export function detachAudio(p: Project, clipId: ID): ID | null {
   a.fadeOut = c.fadeOut;
   a.denoise = c.denoise;
   if (c.keyframes.volume) a.keyframes.volume = deepClone(c.keyframes.volume);
+  if (c.keyframes.pan) a.keyframes.pan = deepClone(c.keyframes.pan);
   p.clips[a.id] = a;
   (c as VideoClip).muted = true;
   return a.id;
@@ -491,7 +507,8 @@ export function duplicateClips(p: Project, ids: ID[]): ID[] {
     p.clips[copy.id] = copy;
     out.push(copy.id);
   }
-  makeRoomFor(p, out, 'overwrite');
+  // The copy goes right after the selection and pushes what follows later (never over it).
+  makeRoomFor(p, out, 'insert');
   return out;
 }
 
@@ -540,4 +557,25 @@ export function removeEmptyTracks(p: Project): void {
     if (t) keep.push(t);
   }
   p.tracks = p.tracks.filter((t) => keep.includes(t));
+}
+
+/**
+ * Frame-aligned spans for timed text (captions): start and end are snapped to
+ * frames separately (so rounding never makes neighbours overlap), and each cue
+ * ends where the next begins at the latest.
+ */
+export function frameCues<T extends { start: number; end: number }>(p: Project, cues: T[]): (T & { qStart: number; qEnd: number })[] {
+  const f = 1 / p.settings.fps;
+  const sorted = [...cues].sort((a, b) => a.start - b.start);
+  return sorted.map((c, i) => {
+    const s = q(p, c.start);
+    const next = sorted[i + 1];
+    const e = q(p, next ? Math.min(c.end, next.start) : c.end);
+    return { ...c, qStart: s, qEnd: Math.max(e, s + f) };
+  });
+}
+
+/** Remove the clips on `trackId` that overlap [start, end). */
+export function clearTrackRange(p: Project, trackId: ID, start: number, end: number): void {
+  for (const c of clipsOnTrack(p, trackId)) if (c.start < end - EPS && clipEnd(c) > start + EPS) delete p.clips[c.id];
 }

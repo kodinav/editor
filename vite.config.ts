@@ -43,7 +43,8 @@ function serviceWorkerPlugin(): Plugin {
     name: 'cutline-sw',
     apply: 'build',
     generateBundle(_opts, bundle) {
-      const files = Object.keys(bundle).filter((f) => !f.endsWith('.map') && f !== 'sw.js' && !f.startsWith('ort/'));
+      // Speech-recognition runtimes (.wasm, ort/) are large and only fetched when auto-captions run.
+      const files = Object.keys(bundle).filter((f) => !f.endsWith('.map') && !f.endsWith('.wasm') && f !== 'sw.js' && !f.startsWith('ort/'));
       const version = createHash('sha256').update(files.sort().join('|')).digest('hex').slice(0, 12);
       const precache = ['./', ...files.map((f) => './' + f), './favicon.svg', './manifest.webmanifest'];
       const source = readFileSync(fileURLToPath(new URL('./src/sw-template.js', import.meta.url)), 'utf8')

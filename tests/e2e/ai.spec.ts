@@ -39,12 +39,18 @@ test('auto captions transcribe speech on-device with word timing', async ({ page
       expect(w.end).toBeLessThanOrEqual(c.duration + 0.05);
     }
   }
-  // A second run reuses the loaded model (this used to wait forever).
+  // A second run reuses the loaded model (this used to wait forever) and replaces the
+  // earlier captions on the same track instead of stacking another.
+  const firstIds = caps.map((c) => c.id);
   const tab = page.getByRole('tab', { name: 'Captions' });
   if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click(); // clicking the open tab collapses it
   await page.getByRole('button', { name: 'Generate captions automatically' }).click();
   await page.getByRole('button', { name: 'Generate captions', exact: true }).click();
-  await expect.poll(async () => (await state(page)).tracks.filter((t) => t.name === 'Auto captions').length, { timeout: 120_000 }).toBe(2);
+  await expect
+    .poll(async () => (await state(page)).clips.filter((c) => c.type === 'caption' && !firstIds.includes(c.id)).length, { timeout: 120_000 })
+    .toBe(caps.length);
+  expect((await state(page)).tracks.filter((t) => t.name === 'Auto captions')).toHaveLength(1);
+  expect((await state(page)).clips.filter((c) => c.type === 'caption')).toHaveLength(caps.length);
   // The highlighted (active) word is burned into the export in yellow.
   const file = await exportVia(page, out('autocaptions.mp4'));
   const first = caps[0];

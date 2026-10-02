@@ -21,6 +21,8 @@ export interface ProjectSettings {
   /** Canvas color behind all layers (hex, e.g. "#000000"). */
   background: string;
   sampleRate: number;
+  /** The user picked the format (so imports don't change it). */
+  chosen?: boolean;
 }
 
 export type AssetKind = 'video' | 'audio' | 'image' | 'font';

@@ -16,6 +16,23 @@ export interface AudioSegment {
   assetId: string;
   start: number;
   end: number;
+  /** Half-lengths of video transitions before/after the clip: its audio crossfades over them. */
+  xfIn: number;
+  xfOut: number;
+}
+
+/** A video clip's sound overlaps its neighbour's across a transition (like the picture does). */
+function crossfades(p: Project, c: AudibleClip): { xfIn: number; xfOut: number } {
+  if (c.type !== 'video') return { xfIn: 0, xfOut: 0 };
+  let xfOut = 0;
+  let xfIn = 0;
+  if (c.transitionOut) {
+    const next = nextAdjacent(p, c);
+    if (next && isVisualClip(next)) xfOut = c.transitionOut.duration / 2;
+  }
+  const prev = prevAdjacent(p, c);
+  if (prev && isVisualClip(prev) && prev.transitionOut) xfIn = prev.transitionOut.duration / 2;
+  return { xfIn, xfOut };
 }
 
 export function audibleSegments(p: Project, from: number, to: number): AudioSegment[] {
@@ -31,15 +48,13 @@ export function audibleSegments(p: Project, from: number, to: number): AudioSegm
     if (track.kind === 'video' && track.hidden) continue;
     const asset = p.assets[c.assetId];
     if (!asset?.audio) continue;
-    const end = clipEnd(c);
-    if (end <= from || c.start >= to) continue;
-    out.push({ clip: c, track, assetId: c.assetId, start: c.start, end });
+    const { xfIn, xfOut } = crossfades(p, c);
+    const start = c.start - xfIn;
+    const end = clipEnd(c) + xfOut;
+    if (end <= from || start >= to) continue;
+    out.push({ clip: c, track, assetId: c.assetId, start, end, xfIn, xfOut });
   }
   return out;
-}
-
-function equalPowerIn(p: number): number {
-  return Math.sin((Math.max(0, Math.min(1, p)) * Math.PI) / 2);
 }
 
 /**
@@ -49,26 +64,15 @@ function equalPowerIn(p: number): number {
 export function clipGainAt(p: Project, seg: AudioSegment, t: number): number {
   const c = seg.clip;
   const lt = t - c.start;
-  if (lt < 0 || t >= seg.end) return 0;
-  let g = evalProp(c, 'volume', lt);
-  if (c.fadeIn > 0 && lt < c.fadeIn) g *= lt / c.fadeIn;
+  if (t < seg.start || t >= seg.end) return 0;
+  let g = evalProp(c, 'volume', Math.min(c.duration, Math.max(0, lt)));
+  if (c.fadeIn > 0 && lt < c.fadeIn) g *= Math.max(0, lt) / c.fadeIn;
   const rem = c.duration - lt;
   if (c.fadeOut > 0 && rem < c.fadeOut) g *= Math.max(0, rem) / c.fadeOut;
-  // Video transitions also crossfade the clips' audio around the cut.
-  if (c.type === 'video') {
-    if (c.transitionOut) {
-      const next = nextAdjacent(p, c);
-      if (next && isVisualClip(next)) {
-        const half = c.transitionOut.duration / 2;
-        if (rem < half) g *= equalPowerIn(rem / half);
-      }
-    }
-    const prev = prevAdjacent(p, c);
-    if (prev && isVisualClip(prev) && prev.transitionOut) {
-      const half = prev.transitionOut.duration / 2;
-      if (lt < half) g *= equalPowerIn(lt / half);
-    }
-  }
+  // Equal-power crossfade across a video transition: both clips are heard over the whole
+  // transition (each continues into its media's handles) and meet at -3 dB on the cut.
+  if (seg.xfOut > 0 && rem < seg.xfOut) g *= Math.cos(((seg.xfOut - rem) / (2 * seg.xfOut)) * (Math.PI / 2));
+  if (seg.xfIn > 0 && lt < seg.xfIn) g *= Math.sin(((lt + seg.xfIn) / (2 * seg.xfIn)) * (Math.PI / 2));
   return g * seg.track.volume * p.masterVolume;
 }
 

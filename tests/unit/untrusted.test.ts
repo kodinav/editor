@@ -190,3 +190,11 @@ describe('looks', () => {
     expect(fx[1].params.__filter).toBeUndefined();
   });
 });
+
+describe('schema versions', () => {
+  it('refuses projects saved by a newer version instead of stripping what it does not know', () => {
+    const doc = JSON.parse(JSON.stringify(richProject()));
+    doc.schemaVersion = 999;
+    expect(() => parseProject(doc)).toThrow(/newer version/);
+  });
+});

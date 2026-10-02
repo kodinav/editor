@@ -17,6 +17,8 @@ import { App } from './ui/App';
 import { Unsupported, missingFeatures } from './ui/Unsupported';
 import { bootstrap } from './state/projectManager';
 import { registerServiceWorker } from './pwa';
+import { ErrorBoundary } from './ui/ErrorBoundary';
+import { installLeaveGuard } from './state/busy';
 
 const root = createRoot(document.getElementById('root')!);
 const missing = missingFeatures();
@@ -26,11 +28,15 @@ if (missing.length > 0) {
 } else {
   root.render(
     <StrictMode>
-      <App />
+      {/* Last line of defence: TopBar, dialogs and the phone layout sit outside the panel boundaries. */}
+      <ErrorBoundary name="editor">
+        <App />
+      </ErrorBoundary>
     </StrictMode>,
   );
   void bootstrap();
   registerServiceWorker();
+  installLeaveGuard();
 }
 
 // Expose a tiny debugging/testing hook (no user data leaves the page).

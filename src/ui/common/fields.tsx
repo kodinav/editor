@@ -52,16 +52,35 @@ export function NumberField({
   }, [shown, step, editing]);
 
   const clampV = (v: number) => Math.min(max, Math.max(min, v));
+  // The handlers in effect when editing started: if the selection changes before the field
+  // loses focus (clicking another clip), the typed value still goes to the original target.
+  const target = useRef({ onChange, onBegin, onEnd, original: '' });
+  const apply = (value: string): boolean => {
+    const t = target.current;
+    if (value === t.original) return true; // just focused and left: nothing to write
+    // Allow simple math like "1920/2" or "45+10".
+    const n = evalMath(value);
+    if (!isFinite(n)) return false;
+    t.onBegin?.();
+    t.onChange(clampV(n / scale));
+    t.onEnd?.();
+    return true;
+  };
   const commitText = () => {
     setEditing(false);
-    // Allow simple math like "1920/2" or "45+10".
-    const n = evalMath(text);
-    if (isFinite(n)) {
-      onBegin?.();
-      onChange(clampV(n / scale));
-      onEnd?.();
-    } else setText(fmt(shown, step));
+    if (!apply(text)) setText(fmt(shown, step));
   };
+  // Selecting another clip can unmount the field before it blurs: keep what was typed.
+  const pending = useRef<string | null>(null);
+  pending.current = editing ? text : null;
+  const applyRef = useRef(apply);
+  applyRef.current = apply;
+  useEffect(
+    () => () => {
+      if (pending.current !== null) applyRef.current(pending.current);
+    },
+    [],
+  );
 
   const onScrubDown = (e: React.PointerEvent) => {
     if (disabled) return;
@@ -104,6 +123,7 @@ export function NumberField({
         value={text}
         disabled={disabled}
         onFocus={(e) => {
+          target.current = { onChange, onBegin, onEnd, original: text };
           setEditing(true);
           e.currentTarget.select();
         }}
@@ -169,8 +189,11 @@ export function Slider({
       onLostPointerCapture={() => onEnd?.()}
       onBlur={() => onEnd?.()}
       onKeyDown={(e) => {
-        if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End' || e.key.startsWith('Page')) onBegin?.();
-        e.stopPropagation();
+        // Only the slider's own keys stay here; Space, Undo and the rest reach the shortcuts.
+        if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End' || e.key.startsWith('Page')) {
+          onBegin?.();
+          e.stopPropagation();
+        }
       }}
       onKeyUp={() => onEnd?.()}
       onChange={(e) => onChange(Number(e.target.value))}

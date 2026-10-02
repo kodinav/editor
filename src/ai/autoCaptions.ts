@@ -1,5 +1,6 @@
+import { startBusy } from '@/state/busy';
 import { produce } from 'immer';
-import { addTrack, makeRoomFor, q } from '@/core/ops';
+import { addTrack, clearTrackRange, frameCues, makeRoomFor } from '@/core/ops';
 import { clipEnd, createCaptionClip, projectDuration, scaledCaptionStyle } from '@/core/project';
 import type { Project } from '@/core/types';
 import { AudioMixer } from '@/engine/audioMixer';
@@ -220,6 +221,15 @@ export interface AutoCaptionResult {
 }
 
 export async function generateCaptions(opts: AutoCaptionOptions, onProgress: (p: AutoCaptionProgress) => void, signal?: AbortSignal): Promise<AutoCaptionResult> {
+  const done = startBusy('automatic captions');
+  try {
+    return await runCaptions(opts, onProgress, signal);
+  } finally {
+    done();
+  }
+}
+
+async function runCaptions(opts: AutoCaptionOptions, onProgress: (p: AutoCaptionProgress) => void, signal?: AbortSignal): Promise<AutoCaptionResult> {
   const p = editor().project;
   const clips = opts.clipIds?.map((id) => p.clips[id]).filter(Boolean) ?? [];
   const range = clips.length ? { start: Math.min(...clips.map((c) => c.start)), end: Math.max(...clips.map(clipEnd)) } : { start: 0, end: projectDuration(p) };
@@ -288,14 +298,20 @@ export async function generateCaptions(opts: AutoCaptionOptions, onProgress: (p:
   if (cues.length === 0) throw new Error('No speech was recognized.');
   let trackId = '';
   editor().commit('Auto captions', (d) => {
-    const t = addTrack(d, 'caption');
-    t.name = 'Auto captions';
-    t.captionStyle = { ...scaledCaptionStyle(d.settings.height), activeWordColor: '#ffd84d' };
+    // Running again replaces the earlier result for this range rather than stacking a new track.
+    let t = d.tracks.find((x) => x.kind === 'caption' && x.name === 'Auto captions');
+    if (t) clearTrackRange(d, t.id, range.start, range.end);
+    else {
+      t = addTrack(d, 'caption');
+      t.name = 'Auto captions';
+      t.captionStyle = { ...scaledCaptionStyle(d.settings.height), activeWordColor: '#ffd84d' };
+    }
     trackId = t.id;
     const ids: string[] = [];
-    for (const c of cues) {
-      const clip = createCaptionClip({ trackId: t.id, start: q(d, c.start), duration: Math.max(q(d, c.end - c.start), 2 / d.settings.fps) }, c.text);
-      clip.words = c.words.map((w) => ({ text: w.text, start: Math.max(0, w.start + (c.start - q(d, c.start))), end: w.end + (c.start - q(d, c.start)) }));
+    for (const c of frameCues(d, cues)) {
+      const shift = c.start - c.qStart;
+      const clip = createCaptionClip({ trackId: t.id, start: c.qStart, duration: c.qEnd - c.qStart }, c.text);
+      clip.words = c.words.map((w) => ({ text: w.text, start: Math.max(0, w.start + shift), end: w.end + shift }));
       d.clips[clip.id] = clip;
       ids.push(clip.id);
     }

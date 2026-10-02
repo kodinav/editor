@@ -141,7 +141,12 @@ export const SHORTCUTS: Shortcut[] = [
   sc('import', 'Project', 'Import media', ['mod+i'], () => openImportPicker()),
   sc('export', 'Project', 'Export video', ['mod+e'], () => editor().set('dialog', 'export')),
   sc('save', 'Project', 'Save now', ['mod+s'], () =>
-    void flushSave().then(() => toast({ kind: 'success', message: 'Saved locally.', timeout: 1200 })),
+    void flushSave().then(() => {
+      // Report what actually happened (writeNow shows its own error toast on failure).
+      const s = editor();
+      if (s.readOnlyReason) toast({ kind: 'warning', message: 'Not saved: this project is open for editing in another tab.' });
+      else if (s.saveState === 'saved') toast({ kind: 'success', message: 'Saved locally.', timeout: 1200 });
+    }),
   ),
   sc('help', 'Project', 'Keyboard shortcuts', ['shift+?', '?', 'shift+/'], () => editor().set('dialog', 'shortcuts')),
 ];
@@ -186,8 +191,8 @@ export function installShortcuts(): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (e.defaultPrevented) return;
     if (isTypingTarget(e.target)) return;
-    // Don't steal keys from open dialogs or menus (except the dialog's own handling).
-    if (document.querySelector('dialog[open]') && e.key !== 'Escape') return;
+    // Open dialogs handle their own keys (Escape closes them natively).
+    if (document.querySelector('dialog[open]')) return;
     if (document.querySelector('.menu')) return;
     const combos = combosOf(e);
     const target = e.target as HTMLElement;
@@ -205,8 +210,28 @@ export function installShortcuts(): () => void {
       }
     }
   };
+  // A button or dropdown used with the mouse shouldn't keep focus: otherwise Space presses it
+  // again instead of playing, and arrow keys change the dropdown. Keyboard users keep focus.
+  let lastPointer = 0;
+  const onPointer = () => (lastPointer = performance.now());
+  const onClick = (e: MouseEvent) => {
+    const el = (e.target as HTMLElement | null)?.closest('button, [role="tab"]') as HTMLElement | null;
+    if (el && e.detail > 0 && !el.closest('dialog, .menu')) el.blur();
+  };
+  const onChange = (e: Event) => {
+    const el = e.target as HTMLElement;
+    if (el.tagName === 'SELECT' && performance.now() - lastPointer < 2000 && !el.closest('dialog')) el.blur();
+  };
   window.addEventListener('keydown', onKey);
-  return () => window.removeEventListener('keydown', onKey);
+  window.addEventListener('pointerdown', onPointer, true);
+  window.addEventListener('click', onClick);
+  window.addEventListener('change', onChange);
+  return () => {
+    window.removeEventListener('keydown', onKey);
+    window.removeEventListener('pointerdown', onPointer, true);
+    window.removeEventListener('click', onClick);
+    window.removeEventListener('change', onChange);
+  };
 }
 
 export function shortcutHint(id: string): string | undefined {

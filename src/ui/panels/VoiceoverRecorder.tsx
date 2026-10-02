@@ -1,3 +1,4 @@
+import { startBusy } from '@/state/busy';
 import { useEffect, useRef, useState } from 'react';
 import { Circle, Square, X } from 'lucide-react';
 import { formatDuration } from '@/core/time';
@@ -86,7 +87,9 @@ export function VoiceoverRecorder({ onClose }: { onClose: () => void }) {
     const rec = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 160000 } : undefined);
     const chunks: Blob[] = [];
     rec.ondataavailable = (e) => e.data.size && chunks.push(e.data);
+    const done = startBusy('a voiceover recording');
     rec.onstop = async () => {
+      done();
       setState('saving');
       player.pause();
       const type = rec.mimeType || 'audio/webm';

@@ -40,6 +40,8 @@ export default function ExportDialog() {
   const [phase, setPhase] = useState<Phase>('setup');
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [result, setResult] = useState<ExportResult | null>(null);
+  // The rendered file is only kept while this dialog can still offer it for download.
+  useEffect(() => () => result?.discard?.(), [result]);
   const [error, setError] = useState<string | null>(null);
   const [support, setSupport] = useState<Record<string, boolean>>({});
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);

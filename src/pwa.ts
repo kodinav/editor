@@ -1,3 +1,4 @@
+import { busyReason } from './state/busy';
 import { toast } from './state/store';
 
 /**
@@ -18,7 +19,9 @@ export function registerServiceWorker() {
           action: {
             label: 'Reload now',
             run: () => {
-              worker.postMessage({ type: 'SKIP_WAITING' });
+              const busy = busyReason();
+              if (busy) toast({ kind: 'warning', message: `Finish ${busy} first, then reload to update.` });
+              else worker.postMessage({ type: 'SKIP_WAITING' });
             },
           },
         });
