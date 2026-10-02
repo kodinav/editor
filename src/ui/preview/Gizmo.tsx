@@ -344,6 +344,13 @@ export function Gizmo({ stageW, stageH }: { stageW: number; stageH: number }) {
             points={corners.map((p) => `${p.x},${p.y}`).join(' ')}
             onPointerDown={(e) => {
               if (e.button !== 0 || isCaption) return;
+              // Another layer drawn on top of the selected one gets the click.
+              const top = pickAt(toProject(e));
+              if (top && top !== selId) {
+                e.stopPropagation();
+                onBackgroundDown(e);
+                return;
+              }
               startMove(e, selId!, g!);
             }}
             style={{ cursor: isCaption ? 'default' : 'move' }}

@@ -369,3 +369,29 @@ describe('captions', () => {
     for (let i = 1; i < out.length; i++) expect(out[i].qStart).toBeGreaterThanOrEqual(out[i - 1].qEnd - 1e-9);
   });
 });
+
+import { removeTimeRanges } from '../../src/core/ops';
+
+describe('removing time across tracks', () => {
+  it('cuts every given track the same way, splitting clips that span a cut', () => {
+    const { p, v1, a1 } = setup();
+    addVideo(p, v1, 0, 10);
+    const cap = p.tracks.find((t) => t.kind === 'video' && t.id !== v1)!.id;
+    const t1 = createTextClip({ trackId: cap, start: 4, duration: 2 }, 'during');
+    const t2 = createTextClip({ trackId: cap, start: 8, duration: 1 }, 'after');
+    p.clips[t1.id] = t1;
+    p.clips[t2.id] = t2;
+    p.markers.push({ id: 'm', t: 9, label: 'm', color: '#fff' });
+    const next = produce(p, (d) => removeTimeRanges(d, [{ start: 2, end: 3 }, { start: 5, end: 5.5 }], [v1, cap, a1]));
+    const vids = clipsOnTrack(next, v1).map((c) => [c.start, c.duration]);
+    expect(vids.reduce((n, [, dur]) => n + dur, 0)).toBeCloseTo(8.5, 6);
+    const texts = clipsOnTrack(next, cap).map((c) => [+c.start.toFixed(3), +c.duration.toFixed(3)]);
+    // "during" (4–6) loses 0.5 s in the middle and moves 1 s earlier; "after" moves 1.5 s earlier.
+    expect(texts).toEqual([
+      [3, 1],
+      [4, 0.5],
+      [6.5, 1],
+    ]);
+    expect(next.markers[0].t).toBeCloseTo(7.5, 6);
+  });
+});

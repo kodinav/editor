@@ -24,7 +24,12 @@ export interface GroupOptions {
   maxGap: number;
   /** Keep captions on screen at least this long when possible. */
   minDuration: number;
+  /** Languages written without spaces between words (Chinese, Japanese, Thai…). */
+  noSpaces?: boolean;
 }
+
+/** Scripts written without spaces between words. */
+export const NO_SPACE_LANGUAGES = new Set(['zh', 'ja', 'th', 'lo', 'my', 'km', 'bo']);
 
 export const DEFAULT_GROUPING: GroupOptions = { maxChars: 42, maxDuration: 3.5, maxGap: 0.6, minDuration: 0.8 };
 
@@ -37,7 +42,7 @@ export function isNonSpeech(text: string): boolean {
 export function groupWords(words: Word[], opts: GroupOptions = DEFAULT_GROUPING): CaptionCue[] {
   const cues: CaptionCue[] = [];
   let cur: Word[] = [];
-  const textOf = (ws: Word[]) => ws.map((w) => w.text.trim()).join(' ').replace(/\s+([,.!?;:])/g, '$1');
+  const textOf = (ws: Word[]) => ws.map((w) => w.text.trim()).join(opts.noSpaces ? '' : ' ').replace(/\s+([,.!?;:])/g, '$1');
   const flush = () => {
     if (!cur.length) return;
     cues.push({ start: cur[0].start, end: cur[cur.length - 1].end, text: textOf(cur), words: cur });

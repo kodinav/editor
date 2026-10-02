@@ -643,3 +643,160 @@ test('a video transition crossfades the sound instead of dipping it to silence',
   const atCut = meanVolume(file, 1.4, 0.2);
   expect(atCut).toBeGreaterThan(steady - 3);
 });
+
+test('a freeze frame holds the picture as it was, animation included', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4']);
+  await waitForMediaReady(page);
+  await commit(page, (d) => {
+    const c: any = Object.values(d.clips)[0];
+    c.keyframes['transform.opacity'] = [
+      { id: 'k1', t: 0, v: 1, ease: 'linear' },
+      { id: 'k2', t: 4, v: 0.2, ease: 'linear' },
+    ];
+    c.animIn = { preset: 'fade', duration: 1 };
+  });
+  await seek(page, 2);
+  await page.keyboard.press('Shift+F');
+  const still = (await state(page)).clips.find((c) => c.freeze);
+  expect(still.transform.opacity).toBeCloseTo(0.6, 2); // value at 2 s of the 1 → 0.2 ramp
+  expect(still.animIn.preset).toBe('none'); // doesn't replay the clip's intro
+});
+
+test('clicking a layer drawn above the selected one selects it', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t'); // bottom title
+  await page.keyboard.press('t'); // a second title on top, same place
+  const [top, bottom] = await page.evaluate(() => {
+    const s = (window as any).__cutline.editor.getState();
+    const ids = s.project.tracks.flatMap((t: any) => (Object.values(s.project.clips) as any[]).filter((c) => c.trackId === t.id).map((c) => c.id));
+    return [ids[0], ids[ids.length - 1]];
+  });
+  await page.evaluate((id) => (window as any).__cutline.editor.getState().select([id]), bottom);
+  const box = (await page.locator('polygon.gizmo-box').first().boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  expect((await state(page)).selection).toEqual([top]);
+});
+
+test('a duplicated project is independent: its media survives deleting the original', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['red.mp4']);
+  await waitForMediaReady(page);
+  await page.waitForFunction(() => (Object.values((window as any).__cutline.editor.getState().project.assets) as any[]).every((a) => a.stored));
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
+  const original = await page.evaluate(() => {
+    const p = (window as any).__cutline.editor.getState().project;
+    return { id: p.id, asset: Object.keys(p.assets)[0] };
+  });
+  page.on('dialog', (d) => d.accept());
+  const cards = () => page.getByRole('dialog').getByRole('button', { name: /^More options for / });
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  await page.getByRole('menuitem', { name: 'All projects…' }).click();
+  await cards().first().click();
+  await page.getByRole('menuitem', { name: 'Duplicate' }).click();
+  await expect(cards()).toHaveCount(2);
+  // Open the copy, then delete the original.
+  await cards().first().click();
+  await page.getByRole('menuitem', { name: 'Open' }).click();
+  await page.waitForFunction((id) => (window as any).__cutline.editor.getState().project.id !== id, original.id);
+  const copyAsset = await page.evaluate(() => Object.keys((window as any).__cutline.editor.getState().project.assets)[0]);
+  expect(copyAsset).not.toBe(original.asset);
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  await page.getByRole('menuitem', { name: 'All projects…' }).click();
+  await cards().last().click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  await expect(cards()).toHaveCount(1);
+  await page.keyboard.press('Escape');
+  await page.evaluate(async () => {
+    const real = Date.now;
+    Date.now = () => real() + 3600_000;
+    try {
+      await (window as any).__cutline.storage.collectGarbage();
+    } finally {
+      Date.now = real;
+    }
+  });
+  const file = await exportVia(page, out('dup-copy.mp4'));
+  expect(near(regionColor(file, 1, 0.05, 0.05), [250, 25, 0])).toBe(true);
+});
+
+test('a translucent text background is even across lines (no darker bands)', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t');
+  const id = (await state(page)).clips[0].id;
+  await commit(page, (d) => {
+    const c: any = d.clips[Object.keys(d.clips)[0]];
+    c.text = 'WWWW\nWWWW\nWWWW';
+    Object.assign(c.style, { backgroundColor: '#ff0000', backgroundOpacity: 0.5, backgroundPadding: 0.6, lineHeight: 1.0 });
+  });
+  const reds = await page.evaluate(async (cid) => {
+    const { player, editor } = (window as any).__cutline;
+    editor.getState().select([]);
+    player.requestRender();
+    await new Promise((r) => setTimeout(r, 600));
+    player.requestRender();
+    await new Promise((r) => setTimeout(r, 200));
+    const bmp = await createImageBitmap(await player.snapshot(640));
+    const c = new OffscreenCanvas(bmp.width, bmp.height);
+    const ctx = c.getContext('2d')!;
+    ctx.drawImage(bmp, 0, 0);
+    // Scan the left padding of the box (no glyphs there) from top to bottom.
+    const out: number[] = [];
+    const x = Math.round(bmp.width / 2);
+    const px = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
+    let left = x;
+    while (left > 0 && px[(Math.round(bmp.height / 2) * bmp.width + left) * 4] > 60) left--;
+    for (let y = 0; y < bmp.height; y++) {
+      const i = (y * bmp.width + left + 3) * 4;
+      if (px[i] > 60 && px[i + 1] < 40) out.push(px[i]);
+    }
+    return out;
+  }, id);
+  expect(reds.length).toBeGreaterThan(40);
+  // Inside the box (away from its rounded top and bottom edges) the colour is uniform; a
+  // doubled overlap between lines would read far brighter.
+  const inner = reds.slice(10, -10);
+  expect(Math.max(...inner) - Math.min(...inner)).toBeLessThanOrEqual(10);
+});
+
+test('blur on a title spreads past the letters instead of being cut off at their box', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t');
+  const extent = async (blur: number) => {
+    await page.evaluate((amount) => {
+      (window as any).__cutline.editor.getState().commit('Blur', (d: any) => {
+        const c: any = d.clips[Object.keys(d.clips)[0]];
+        c.text = 'II';
+        c.effects = amount ? [{ id: 'fx1', type: 'blur', enabled: true, params: { amount } }] : [];
+      });
+    }, blur);
+    return page.evaluate(async () => {
+      const { player, editor } = (window as any).__cutline;
+      editor.getState().select([]);
+      for (let i = 0; i < 2; i++) {
+        await new Promise((r) => setTimeout(r, 400));
+        player.requestRender();
+      }
+      await new Promise((r) => setTimeout(r, 200));
+      const bmp = await createImageBitmap(await player.snapshot(640));
+      const c = new OffscreenCanvas(bmp.width, bmp.height);
+      const ctx = c.getContext('2d')!;
+      ctx.drawImage(bmp, 0, 0);
+      const px = ctx.getImageData(0, 0, bmp.width, bmp.height).data;
+      let x0 = bmp.width;
+      let x1 = 0;
+      for (let y = 0; y < bmp.height; y++)
+        for (let x = 0; x < bmp.width; x++) {
+          if (px[(y * bmp.width + x) * 4] > 12) {
+            x0 = Math.min(x0, x);
+            x1 = Math.max(x1, x);
+          }
+        }
+      return x1 - x0;
+    });
+  };
+  const sharp = await extent(0);
+  const blurred = await extent(40);
+  expect(sharp).toBeGreaterThan(10);
+  expect(blurred).toBeGreaterThan(sharp + 15); // clipped at the text box it reached only ~+7
+});

@@ -23,6 +23,9 @@ export function VoiceoverRecorder({ onClose }: { onClose: () => void }) {
   const recRef = useRef<MediaRecorder | null>(null);
   const startAt = useRef(0);
   const startTime = useRef(0);
+  /** Wall clock when the recorder really started, and a (wall clock, heard time) pair from playback. */
+  const recStarted = useRef(0);
+  const heard = useRef<{ wall: number; t: number } | null>(null);
 
   useEffect(() => {
     let ctx: AudioContext | null = null;
@@ -100,12 +103,29 @@ export function VoiceoverRecorder({ onClose }: { onClose: () => void }) {
       const p = editor().project;
       const dur = (performance.now() - startAt.current) / 1000;
       const track = freeAudioTrack(p, startTime.current, startTime.current + dur);
-      await importFiles([file], { place: { time: startTime.current, trackId: track } });
+      const ids = await importFiles([file], { place: { time: startTime.current, trackId: track } });
+      // Line the take up with what was heard: playback started a moment after the recording,
+      // reaches the ears after the output latency, and the voice comes back with input latency.
+      const inputLatency = Number((streamRef.current?.getAudioTracks()[0]?.getSettings() as { latency?: number } | undefined)?.latency) || 0;
+      const h = heard.current;
+      const playbackDelay = h ? (h.wall - (h.t - startTime.current) * 1000 - recStarted.current) / 1000 : 0;
+      const offset = Math.min(1, Math.max(0, playbackDelay + inputLatency));
+      if (offset > 0.002 && ids[0]) {
+        editor().commit('Align voiceover', (d) => {
+          const c = Object.values(d.clips).find((x) => x.type === 'audio' && x.assetId === ids[0]);
+          if (c && c.type === 'audio' && c.duration > offset + 0.1) {
+            c.sourceIn += offset;
+            c.duration -= offset;
+          }
+        });
+      }
       setState('idle');
       setElapsed(0);
     };
     startTime.current = usePlayback.getState().time;
     startAt.current = performance.now();
+    heard.current = null;
+    rec.onstart = () => (recStarted.current = performance.now());
     rec.start(1000);
     recRef.current = rec;
     setState('recording');
@@ -113,6 +133,7 @@ export function VoiceoverRecorder({ onClose }: { onClose: () => void }) {
   };
 
   const stop = () => {
+    if (usePlayback.getState().playing) heard.current = { wall: performance.now(), t: usePlayback.getState().time };
     recRef.current?.stop();
   };
 

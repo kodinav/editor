@@ -579,3 +579,29 @@ export function frameCues<T extends { start: number; end: number }>(p: Project, 
 export function clearTrackRange(p: Project, trackId: ID, start: number, end: number): void {
   for (const c of clipsOnTrack(p, trackId)) if (c.start < end - EPS && clipEnd(c) > start + EPS) delete p.clips[c.id];
 }
+
+/**
+ * Cut the time ranges out of the given tracks and close the gaps, moving the
+ * tracks (and markers) together so everything after a cut stays in sync.
+ * Clips spanning a range are split around it.
+ */
+export function removeTimeRanges(p: Project, ranges: { start: number; end: number }[], trackIds: ID[]): void {
+  for (const r of [...ranges].sort((a, b) => b.start - a.start)) {
+    const len = r.end - r.start;
+    if (len <= EPS) continue;
+    for (const tid of trackIds) {
+      for (const c of clipsOnTrack(p, tid)) {
+        if (clipEnd(c) <= r.start + EPS || c.start >= r.end - EPS) continue;
+        let id: ID | null = c.id;
+        if (clipEnd(c) > r.end + EPS) splitClip(p, id, r.end);
+        if (p.clips[id].start < r.start - EPS) id = splitClip(p, id, r.start);
+        if (id) delete p.clips[id];
+      }
+      shiftTrackFrom(p, tid, r.end - EPS, -len);
+    }
+    for (const m of p.markers) {
+      if (m.t >= r.end - EPS) m.t = q(p, m.t - len);
+      else if (m.t > r.start) m.t = q(p, r.start);
+    }
+  }
+}

@@ -136,7 +136,7 @@
   height: 24px;
   border-radius: 50%;
   border: 0;
-  background: var(--accent);
+  background: var(--accent-solid);
   color: #fff;
   display: grid;
   place-items: center;

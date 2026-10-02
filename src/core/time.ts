@@ -71,7 +71,8 @@ export function parseTime(input: string, fps: number): number | null {
   const parts = s.split(':').map((p) => p.trim());
   if (parts.some((p) => !/^\d+(\.\d+)?$/.test(p))) return null;
   const nums = parts.map(Number);
-  if (nums.length === 4) return nums[0] * 3600 + nums[1] * 60 + nums[2] + nums[3] / fps;
+  // HH:MM:SS:FF counts frames at the rounded rate (non-drop-frame), exactly as it is displayed.
+  if (nums.length === 4) return ((nums[0] * 3600 + nums[1] * 60 + nums[2]) * Math.round(fps) + nums[3]) / fps;
   if (nums.length === 3) return nums[0] * 3600 + nums[1] * 60 + nums[2];
   if (nums.length === 2) return nums[0] * 60 + nums[1];
   return null;

@@ -82,9 +82,9 @@ function wrap(ctx: OffscreenCanvasRenderingContext2D, text: string, maxWidth: nu
   return lines;
 }
 
-function roundRect(ctx: OffscreenCanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+function roundRect(ctx: OffscreenCanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number, newPath = true) {
   r = Math.max(0, Math.min(r, w / 2, h / 2));
-  ctx.beginPath();
+  if (newPath) ctx.beginPath();
   ctx.moveTo(x + r, y);
   ctx.arcTo(x + w, y, x + w, y + h, r);
   ctx.arcTo(x + w, y + h, x, y + h, r);
@@ -165,18 +165,20 @@ export function renderText(rawText: string, style: TextStyle, opts: TextRenderOp
   const lineX = (l: Line) =>
     style.align === 'left' ? originX : style.align === 'right' ? originX + contentW - l.width : originX + (contentW - l.width) / 2;
 
-  // Background boxes, one per line, merged visually by overlapping slightly.
+  // Background boxes, one per line, filled as a single shape: where they overlap, a
+  // translucent colour is applied once (no darker bands between lines).
   if (hasBg) {
     c.fillStyle = hexAlpha(style.backgroundColor!, style.backgroundOpacity);
     const radius = style.backgroundRadius * size;
+    c.beginPath();
     lines.forEach((l, i) => {
       if (!l.text.trim()) return;
       const x = lineX(l) - padX;
       const top = originY - padY + i * lineH;
       const h = (i === lines.length - 1 ? ascent + descent : lineH) + padY * 2;
-      roundRect(c, x, top, l.width + padX * 2, h + (i < lines.length - 1 ? 1 : 0), radius);
-      c.fill();
+      roundRect(c, x, top, l.width + padX * 2, h + (i < lines.length - 1 ? 1 : 0), radius, false);
     });
+    c.fill('nonzero');
   }
 
   const visible = opts.visibleChars ?? Infinity;

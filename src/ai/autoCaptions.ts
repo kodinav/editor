@@ -5,8 +5,8 @@ import { clipEnd, createCaptionClip, projectDuration, scaledCaptionStyle } from 
 import type { Project } from '@/core/types';
 import { AudioMixer } from '@/engine/audioMixer';
 import { media } from '@/media/registry';
-import { editor } from '@/state/store';
-import { chooseWindows, groupWords, type Word } from './words';
+import { editor, toast } from '@/state/store';
+import { chooseWindows, groupWords, NO_SPACE_LANGUAGES, type Word } from './words';
 import type { ModelSize, WorkerIn, WorkerOut } from './transcribe.worker';
 
 /**
@@ -294,8 +294,22 @@ async function runCaptions(opts: AutoCaptionOptions, onProgress: (p: AutoCaption
   }
   onProgress({ stage: 'transcribe', value: 1, done: windows.length, total: windows.length });
 
-  const cues = groupWords(words, { maxChars: Math.round(42 * Math.max(0.6, Math.min(1, p.settings.width / p.settings.height))), maxDuration: 3.5, maxGap: 0.6, minDuration: 0.8 });
+  const noSpaces = NO_SPACE_LANGUAGES.has(language ?? '');
+  const cues = groupWords(words, {
+    // Characters in these scripts carry about two Latin letters' worth of meaning.
+    maxChars: Math.round((noSpaces ? 20 : 42) * Math.max(0.6, Math.min(1, p.settings.width / p.settings.height))),
+    maxDuration: 3.5,
+    maxGap: 0.6,
+    minDuration: 0.8,
+    noSpaces,
+  });
   if (cues.length === 0) throw new Error('No speech was recognized.');
+  // Transcription takes a while: the captions belong to the project (and timing) it started from.
+  if (editor().project.id !== p.id) throw new Error('A different project was opened while transcribing, so the captions were not added.');
+  const timing = (q: typeof p) => JSON.stringify(Object.values(q.clips).flatMap((c) => ('assetId' in c ? [c.id, c.start, c.duration, 'sourceIn' in c ? c.sourceIn : 0] : [])));
+  if (timing(editor().project) !== timing(p)) {
+    toast({ kind: 'warning', message: 'Clips moved while captions were being made.', detail: 'Check that the new captions still line up with the speech.' });
+  }
   let trackId = '';
   editor().commit('Auto captions', (d) => {
     // Running again replaces the earlier result for this range rather than stacking a new track.

@@ -11,7 +11,7 @@ import { player } from '@/playback/player';
 import { downloadBlob } from '@/ui/download';
 import { openImportPicker } from '../importPicker';
 import { PanelHead } from './LeftDock';
-import { AutoCaptions } from './AutoCaptions';
+import { AutoCaptions, useCaptionJob } from './AutoCaptions';
 
 export function CaptionsPanel() {
   const project = useEditor((s) => s.project);
@@ -23,8 +23,12 @@ export function CaptionsPanel() {
   const captions = useMemo(() => (track ? (clipsOnTrack(project, track.id) as CaptionClip[]) : []), [project, track]);
   const [pasting, setPasting] = useState(false);
   const [auto, setAuto] = useState(false);
+  const jobRunning = useCaptionJob((s) => s.running);
   const [transcript, setTranscript] = useState('');
-  const time = usePlayback((s) => s.time);
+  // Re-render when the caption under the playhead changes, not on every playback frame.
+  const activeId = usePlayback((s) => captions.find((c) => s.time >= c.start && s.time < c.start + c.duration)?.id ?? null);
+  const time = usePlayback((s) => (pasting ? s.time : 0));
+
   const fps = project.settings.fps;
 
   const exportCaptions = (kind: 'srt' | 'vtt') => {
@@ -34,7 +38,7 @@ export function CaptionsPanel() {
   };
 
   const addTranscript = () => {
-    const cues = chunkTranscript(transcript, time);
+    const cues = chunkTranscript(transcript, usePlayback.getState().time);
     if (!cues.length) return;
     editor().commit('Add captions', (d) => {
       let t = d.tracks.find((x) => x.id === track?.id);
@@ -64,7 +68,7 @@ export function CaptionsPanel() {
           </button>
         )}
       </PanelHead>
-      {auto && <AutoCaptions onClose={() => setAuto(false)} />}
+      {(auto || jobRunning) && <AutoCaptions onClose={() => setAuto(false)} />}
       <div className="panel-body">
         {captionTracks.length > 1 && (
           <label className="field" style={{ marginBottom: 10 }}>
@@ -166,7 +170,7 @@ export function CaptionsPanel() {
             </button>
             <ol className="caption-list" aria-label="Captions">
               {captions.map((c) => {
-                const active = time >= c.start && time < c.start + c.duration;
+                const active = c.id === activeId;
                 return (
                   <li key={c.id} className={`caption-item${selection.includes(c.id) ? ' selected' : ''}${active ? ' active' : ''}`}>
                     <button

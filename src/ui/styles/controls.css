@@ -22,13 +22,13 @@
   cursor: not-allowed;
 }
 .btn.primary {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
   color: #fff;
 }
 .btn.primary:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: var(--accent-solid-hover);
+  border-color: var(--accent-solid-hover);
 }
 .btn.danger {
   background: transparent;
@@ -79,6 +79,8 @@
 .icon-btn[aria-pressed='true'] {
   background: var(--accent-soft);
   color: var(--accent-text);
+  /* A visible edge too, so "on" doesn't rely on colour alone. */
+  box-shadow: inset 0 0 0 1px var(--accent);
 }
 .icon-btn.small {
   width: 24px;
@@ -357,7 +359,7 @@ textarea.input {
 }
 .menu-item:hover:not(:disabled),
 .menu-item:focus-visible {
-  background: var(--accent);
+  background: var(--accent-solid);
   color: #fff;
   outline: none;
 }
@@ -635,4 +637,22 @@ dialog.modal::backdrop {
   right: 8px;
   left: 8px;
   width: auto;
+}
+
+/* Touch screens: fields large enough that iOS doesn't zoom on focus, and bigger hit targets. */
+@media (pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='color']),
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+  .icon-btn {
+    width: 40px;
+    height: 40px;
+  }
+  .icon-btn.small,
+  .icon-btn.tiny {
+    width: 34px;
+    height: 34px;
+  }
 }

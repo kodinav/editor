@@ -363,3 +363,24 @@
   padding: 16px;
   font-size: 12.5px;
 }
+
+/* Phone held sideways: every pixel of height counts, so the chrome gets compact and the
+   timeline keeps room for a few tracks. Side insets keep controls clear of the notch. */
+@media (orientation: landscape) and (max-height: 520px) {
+  .app[data-layout='phone'] {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .app[data-layout='phone'] .topbar {
+    height: 40px;
+    min-height: 40px;
+  }
+  .phone-nav {
+    padding: 2px 4px calc(2px + env(safe-area-inset-bottom));
+  }
+  .phone-nav button {
+    flex-direction: row;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+}

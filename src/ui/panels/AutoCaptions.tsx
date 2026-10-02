@@ -1,4 +1,5 @@
-import { useRef, useState } from 'react';
+import { useState } from 'react';
+import { create } from 'zustand';
 import { Lock, Sparkles, X } from 'lucide-react';
 import { CancelledError, generateCaptions, LANGUAGES, MODEL_INFO, type AutoCaptionProgress } from '@/ai/autoCaptions';
 import type { ModelSize } from '@/ai/transcribe.worker';
@@ -21,6 +22,13 @@ function save(key: string, v: unknown) {
   }
 }
 
+/** The running job lives outside the panel, so switching panels doesn't lose its progress or Cancel. */
+export const useCaptionJob = create<{ running: boolean; progress: AutoCaptionProgress | null; abort: AbortController | null }>(() => ({
+  running: false,
+  progress: null,
+  abort: null,
+}));
+
 /** On-device speech-to-text captions (Whisper in a worker). */
 export function AutoCaptions({ onClose }: { onClose: () => void }) {
   const selection = useEditor((s) => s.selection);
@@ -30,17 +38,15 @@ export function AutoCaptions({ onClose }: { onClose: () => void }) {
   const [language, setLanguage] = useState<string | null>(() => load('ac.lang', null));
   const [task, setTask] = useState<'transcribe' | 'translate'>('transcribe');
   const [source, setSource] = useState<'selection' | 'mix'>(speechClips.length ? 'selection' : 'mix');
-  const [progress, setProgress] = useState<AutoCaptionProgress | null>(null);
-  const [running, setRunning] = useState(false);
-  const abort = useRef<AbortController | null>(null);
+  const { running, progress } = useCaptionJob();
+  const cancel = () => useCaptionJob.getState().abort?.abort();
+  const setProgress = (p: AutoCaptionProgress | null) => useCaptionJob.setState({ progress: p });
 
   const start = async () => {
     save('ac.model', model);
     save('ac.lang', language);
-    setRunning(true);
-    setProgress({ stage: 'audio', value: 0 });
     const ac = new AbortController();
-    abort.current = ac;
+    useCaptionJob.setState({ running: true, progress: { stage: 'audio', value: 0 }, abort: ac });
     try {
       const res = await generateCaptions({ model, language, task, clipIds: source === 'selection' && speechClips.length ? speechClips : null }, setProgress, ac.signal);
       const langName = LANGUAGES.find((l) => l.code === res.language)?.name ?? res.language.toUpperCase();
@@ -54,8 +60,7 @@ export function AutoCaptions({ onClose }: { onClose: () => void }) {
     } catch (e) {
       if (!(e instanceof CancelledError)) toast({ kind: 'error', message: 'Auto captions failed.', detail: (e as Error).message });
     } finally {
-      setRunning(false);
-      setProgress(null);
+      useCaptionJob.setState({ running: false, progress: null, abort: null });
     }
   };
 
@@ -72,7 +77,7 @@ export function AutoCaptions({ onClose }: { onClose: () => void }) {
       <div className="row">
         <Sparkles size={15} />
         <strong className="grow">Auto captions</strong>
-        <button className="icon-btn tiny" aria-label="Close" onClick={() => (running ? abort.current?.abort() : onClose())}>
+        <button className="icon-btn tiny" aria-label="Close" onClick={() => (running ? cancel() : onClose())}>
           <X size={14} />
         </button>
       </div>
@@ -134,7 +139,7 @@ export function AutoCaptions({ onClose }: { onClose: () => void }) {
           <div className="progress">
             <div style={{ width: `${Math.round(pct * 100)}%` }} />
           </div>
-          <button className="btn small" onClick={() => abort.current?.abort()}>
+          <button className="btn small" onClick={() => cancel()}>
             Cancel
           </button>
         </>

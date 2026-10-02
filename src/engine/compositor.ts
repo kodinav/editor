@@ -422,6 +422,7 @@ export class Compositor {
     let tex = src.tex;
     let uv = this.uvMatrix(l, src);
     let processed: RenderTarget | null = null;
+    let quad = g;
     const needsProcessing = l.effects.length > 0 || !isNeutralColor(l.color) || l.animBlur > 0.5;
     if (needsProcessing) {
       // Process at the displayed size, capped by available source pixels.
@@ -434,8 +435,28 @@ export class Compositor {
       const pw = Math.max(1, Math.min(4096, Math.round(dispW * k)));
       const ph = Math.max(1, Math.min(4096, Math.round(dispH * k)));
       const pxScale = pw / visW; // processing px per project px
-      let rt = this.pool.acquire(pw, ph);
-      this.pass(this.prog('copy', S.COPY_FS), src.tex, rt, () => {}, uv);
+      // Blur and glow spread past a transparent layer's edges (text, shapes, cut-out images):
+      // process on a canvas padded by that spread so the soft edge isn't cut off.
+      const spread = this.spreadOf(l);
+      const pad = Math.min(1024, Math.ceil(spread * pxScale));
+      let rt = this.pool.acquire(pw + 2 * pad, ph + 2 * pad);
+      if (pad > 0) {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, rt.fbo);
+        gl.viewport(0, 0, rt.w, rt.h);
+        gl.clearColor(0, 0, 0, 0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        const copy = this.prog('copy', S.COPY_FS);
+        copy.use();
+        copy.m3('uMatrix', FULLSCREEN);
+        copy.m3('uUVMatrix', uv);
+        this.bindTex(0, src.tex);
+        copy.i1('uTex', 0);
+        gl.viewport(pad, pad, pw, ph);
+        gl.disable(gl.BLEND);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+        const m = pad / pxScale;
+        quad = { ...g, vis: { x0: g.vis.x0 - m, y0: g.vis.y0 - m, x1: g.vis.x1 + m, y1: g.vis.y1 + m } };
+      } else this.pass(this.prog('copy', S.COPY_FS), src.tex, rt, () => {}, uv);
       if (!isNeutralColor(l.color)) rt = this.colorPass(rt, l.color);
       for (const fx of l.effects) rt = this.applyEffect(fx, rt, pxScale, l.localTime);
       if (l.animBlur > 0.5) rt = this.blur(rt, l.animBlur * 0.5 * pxScale);
@@ -450,13 +471,13 @@ export class Compositor {
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
     const p = this.prog('draw', S.DRAW_FS);
     p.use();
-    p.m3('uMatrix', this.quadMatrix(g));
+    p.m3('uMatrix', this.quadMatrix(quad));
     p.m3('uUVMatrix', uv);
     this.bindTex(0, tex);
     p.i1('uTex', 0);
     p.f1('uOpacity', l.opacity);
-    p.f2('uSize', visW * this.scale, visH * this.scale);
-    p.f1('uRadius', l.cornerRadius * Math.min(visW, visH) * this.scale);
+    p.f2('uSize', (quad.vis.x1 - quad.vis.x0) * this.scale, (quad.vis.y1 - quad.vis.y0) * this.scale);
+    p.f1('uRadius', quad === g ? l.cornerRadius * Math.min(visW, visH) * this.scale : 0);
     p.f1('uWipe', l.wipe ?? 1);
     // Mipmapped sampling for heavy downscales of video (prevents shimmering).
     gl.drawArrays(gl.TRIANGLES, 0, 6);
@@ -627,6 +648,20 @@ export class Compositor {
     }
     this.pool.release(rt);
     return out2;
+  }
+
+  /** How far (project px) this layer's blur/glow can spread beyond its edges; 0 for opaque layers. */
+  private spreadOf(l: ClipLayer): number {
+    const s = l.source;
+    const transparent = s.kind === 'text' || s.kind === 'shape' || (s.kind === 'image' && s.alpha);
+    if (!transparent) return 0;
+    let spread = l.animBlur * 1.5;
+    for (const fx of l.effects) {
+      if (fx.type === 'blur') spread += this.num(fx, 'amount') * 1.5;
+      else if (fx.type === 'glow') spread += this.num(fx, 'radius') * 1.8;
+      else if (fx.type === 'directionalBlur') spread += this.num(fx, 'amount') * 1.2;
+    }
+    return spread;
   }
 
   private num(fx: ResolvedEffect, key: string): number {

@@ -31,7 +31,7 @@ import { COLOR_PARAMS } from './effects';
 
 export type LayerSource =
   | { kind: 'video'; assetId: string; time: number }
-  | { kind: 'image'; assetId: string; /** Clip-local time (animated images loop on it). */ time: number }
+  | { kind: 'image'; assetId: string; /** Clip-local time (animated images loop on it). */ time: number; /** The format can be transparent. */ alpha?: boolean }
   | { kind: 'text'; clip: TextClip; visibleChars: number | null }
   | { kind: 'shape'; clip: ShapeClip }
   | { kind: 'caption'; clip: CaptionClip; style: CaptionStyle; localTime: number };
@@ -260,7 +260,7 @@ export function buildClipLayer(p: Project, c: VisualClip, t: number): ClipLayer 
       source = { kind: 'video', assetId: c.assetId, time: sourceTimeFor(p, c, t) };
       break;
     case 'image':
-      source = { kind: 'image', assetId: (c as ImageClip).assetId, time: rawLocal };
+      source = { kind: 'image', assetId: (c as ImageClip).assetId, time: rawLocal, alpha: /png|webp|gif|avif|svg/i.test(p.assets[(c as ImageClip).assetId]?.mimeType ?? '') };
       break;
     case 'text':
       source = { kind: 'text', clip: c, visibleChars };

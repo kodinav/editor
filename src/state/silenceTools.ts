@@ -1,4 +1,4 @@
-import { shiftTrackFrom, splitClip, normalize } from '@/core/ops';
+import { normalize, removeTimeRanges } from '@/core/ops';
 import { clipEnd } from '@/core/project';
 import { silentRegions, windowRms, type Region, type SilenceOptions } from '@/core/silence';
 import { media } from '@/media/registry';
@@ -45,34 +45,23 @@ export async function findSilences(clipId: string, opts: SilenceOptions, onProgr
     .filter((r) => r.end - r.start > 1 / editor().project.settings.fps);
 }
 
-/** Cut the regions out of the clip and close the gaps on its track. */
+/**
+ * Cut the regions (inside the clip) out of the timeline and close the gaps. Every unlocked
+ * track is cut the same way, so captions, detached audio and other layers stay in sync;
+ * lock a track (e.g. background music) to leave it untouched.
+ */
 export function removeRegions(clipId: string, regions: Region[]): number {
   const c0 = editor().project.clips[clipId];
   if (!c0 || regions.length === 0) return 0;
-  let removed = 0;
+  const inside = regions
+    .map((r) => ({ start: Math.max(c0.start, r.start), end: Math.min(clipEnd(c0), r.end) }))
+    .filter((r) => r.end - r.start > 1e-6);
   editor().commit('Remove silences', (d) => {
-    const trackId = c0.trackId;
-    // Right to left, so earlier regions keep their positions; the original id always
-    // refers to the left-most piece.
-    for (const r of [...regions].sort((a, b) => b.start - a.start)) {
-      const c = d.clips[clipId];
-      if (!c) break;
-      const end = clipEnd(c);
-      const s = Math.max(c.start, r.start);
-      const e = Math.min(end, r.end);
-      if (e - s <= 0) continue;
-      let middleId: string | null = clipId;
-      if (e < end - 1e-6) splitClip(d, clipId, e);
-      if (s > c.start + 1e-6) middleId = splitClip(d, clipId, s);
-      if (!middleId || !d.clips[middleId]) continue;
-      const len = d.clips[middleId].duration;
-      delete d.clips[middleId];
-      shiftTrackFrom(d, trackId, e - 1e-6, -len);
-      removed++;
-    }
+    const tracks = d.tracks.filter((t) => !t.locked).map((t) => t.id);
+    removeTimeRanges(d, inside, tracks);
     normalize(d);
   });
-  return removed;
+  return inside.length;
 }
 
 export async function removeSilencesFromClip(clipId: string, opts: SilenceOptions) {
@@ -84,7 +73,12 @@ export async function removeSilencesFromClip(clipId: string, opts: SilenceOption
     }
     const total = regions.reduce((n, r) => n + r.end - r.start, 0);
     const n = removeRegions(clipId, regions);
-    toast({ kind: 'success', message: `Removed ${n} pause${n === 1 ? '' : 's'} (${total.toFixed(1)} s).`, detail: 'Undo restores them.' });
+    const locked = editor().project.tracks.some((t) => t.locked);
+    toast({
+      kind: 'success',
+      message: `Removed ${n} pause${n === 1 ? '' : 's'} (${total.toFixed(1)} s).`,
+      detail: `Other tracks were cut the same way to stay in sync${locked ? ' (locked tracks were left as they are)' : ''}. Undo restores everything.`,
+    });
   } catch (e) {
     toast({ kind: 'error', message: 'Could not analyze the audio.', detail: (e as Error).message });
   }

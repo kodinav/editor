@@ -90,11 +90,16 @@ function tabsFor(c: Clip): { id: Tab; label: string }[] {
   switch (c.type) {
     case 'video':
       return [
-        { id: 'edit', label: 'Video' },
+        { id: 'edit', label: c.freeze ? 'Still' : 'Video' },
         { id: 'color', label: 'Color' },
         { id: 'effects', label: 'Effects' },
-        { id: 'audio', label: 'Audio' },
-        { id: 'speed', label: 'Speed' },
+        // A freeze frame is a still: it has no sound and no playback speed.
+        ...(c.freeze
+          ? []
+          : [
+              { id: 'audio' as const, label: 'Audio' },
+              { id: 'speed' as const, label: 'Speed' },
+            ]),
       ];
     case 'image':
       return [

@@ -171,3 +171,26 @@ describe('ducking', () => {
     expect(sk(k, 5)).toBeCloseTo(0.8);
   });
 });
+
+
+describe('timecode', () => {
+  it('typing back a displayed timecode lands on the same frame at any frame rate', () => {
+    for (const fps of [23.976, 24, 25, 29.97, 30, 59.94, 60]) {
+      for (const t of [0, 1.234, 59.9, 61.5, 600.01, 3599.5]) {
+        const shown = formatTimecode(t, fps);
+        expect(parseTime(shown, fps), `${fps} fps, ${shown}`).toBeCloseTo(snapToFrame(t, fps), 9);
+      }
+    }
+  });
+});
+
+describe('caption grouping by script', () => {
+  it('joins words without spaces for languages written without them', () => {
+    const words = [
+      { text: '你好', start: 0, end: 0.4 },
+      { text: '世界', start: 0.4, end: 0.8 },
+    ];
+    expect(groupWords(words, { maxChars: 20, maxDuration: 3, maxGap: 0.6, minDuration: 0.5, noSpaces: true })[0].text).toBe('你好世界');
+    expect(groupWords(words, { maxChars: 20, maxDuration: 3, maxGap: 0.6, minDuration: 0.5 })[0].text).toBe('你好 世界');
+  });
+});

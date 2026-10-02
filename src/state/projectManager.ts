@@ -9,7 +9,9 @@ import { media } from '@/media/registry';
 import { player } from '@/playback/player';
 import {
   allProjects,
+  getPeaks,
   getProjectMeta,
+  getThumbs,
   deleteDerived,
   deleteProjectRecord,
   kvGet,
@@ -17,10 +19,11 @@ import {
   listProjects,
   loadProject,
   putPeaks,
+  putThumbs,
   saveProject,
   type ProjectMeta,
 } from '@/storage/db';
-import { deleteFile, DIRS, getFile, listFiles, opfsUsable, requestPersistence } from '@/storage/opfs';
+import { deleteFile, DIRS, getFile, getFileHandle, listFiles, opfsUsable, requestPersistence } from '@/storage/opfs';
 import { restoreNoiseReduction } from './denoiseTools';
 import { audioUnusable } from './importer';
 import { editor, toast, useEditor, usePlayback } from './store';
@@ -319,14 +322,53 @@ export async function openProjectById(id: string): Promise<void> {
   await openProject(p);
 }
 
+/** Copy a stored file (if it exists) under a new name. */
+async function copyStored(folder: string, from: string, to: string): Promise<void> {
+  const f = await getFile(folder, from);
+  if (!f) return;
+  const h = await getFileHandle(folder, to, true);
+  if (!h) throw new Error('Local storage is not available.');
+  const w = await h.createWritable();
+  await f.stream().pipeTo(w);
+}
+
+/**
+ * A duplicate is fully independent: its media gets new ids and its own copies
+ * of the stored files, so relinking or cleaning audio in one never changes the
+ * other.
+ */
 export async function duplicateProject(id: string): Promise<void> {
   await flushSave();
   const src = id === editor().project.id ? editor().project : await loadProject(id);
   if (!src) return;
+  const ids = new Map(Object.keys(src.assets).map((a) => [a, uid('ast')]));
   const copy: Project = { ...structuredClone(src), id: uid('prj'), name: `${src.name} (copy)`, createdAt: Date.now(), updatedAt: Date.now() };
-  const meta = (await getProjectMeta(id))?.thumbnail;
-  await saveProject(copy, projectMeta(copy, meta));
-  toast({ kind: 'success', message: `Duplicated “${src.name}”.` });
+  copy.assets = Object.fromEntries(Object.values(copy.assets).map((a) => [ids.get(a.id)!, { ...a, id: ids.get(a.id)! }]));
+  for (const c of Object.values(copy.clips)) if ('assetId' in c) c.assetId = ids.get(c.assetId) ?? c.assetId;
+  const working = Object.values(src.assets).some((a) => a.stored) ? toast({ kind: 'info', message: `Duplicating “${src.name}”…`, detail: 'Copying its media.', timeout: 0 }) : null;
+  try {
+    for (const [from, to] of ids) {
+      await copyStored(DIRS.media, from, to);
+      await copyStored(DIRS.pcm, `${from}.pcm`, `${to}.pcm`);
+      await copyStored(DIRS.pcm, `${from}.nr.pcm`, `${to}.nr.pcm`);
+      const thumbs = await getThumbs(from);
+      if (thumbs) await putThumbs({ ...thumbs, assetId: to });
+      const peaks = await getPeaks(from);
+      if (peaks) await putPeaks({ ...peaks, assetId: to });
+    }
+    const meta = (await getProjectMeta(id))?.thumbnail;
+    await saveProject(copy, projectMeta(copy, meta));
+    toast({ kind: 'success', message: `Duplicated “${src.name}”.` });
+  } catch (e) {
+    for (const to of ids.values()) {
+      await deleteFile(DIRS.media, to).catch(() => {});
+      await deleteFile(DIRS.pcm, `${to}.pcm`).catch(() => {});
+      await deleteFile(DIRS.pcm, `${to}.nr.pcm`).catch(() => {});
+    }
+    toast({ kind: 'error', message: `Couldn’t duplicate “${src.name}”.`, detail: (e as Error).message });
+  } finally {
+    if (working !== null) editor().dismissToast(working);
+  }
 }
 
 export async function deleteProject(id: string): Promise<void> {

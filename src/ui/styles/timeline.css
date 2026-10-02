@@ -512,11 +512,17 @@
   opacity: 1;
 }
 .cut-add:hover {
-  background: var(--accent);
-  border-color: var(--accent);
+  background: var(--accent-solid);
+  border-color: var(--accent-solid);
 }
 @media (hover: none) {
   .cut-add {
     opacity: 0.85;
+  }
+}
+
+@media (pointer: coarse) {
+  .trim-handle {
+    width: 16px;
   }
 }

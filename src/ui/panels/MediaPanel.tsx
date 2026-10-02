@@ -143,7 +143,8 @@ function AssetCard({ asset, uses }: { asset: Asset; uses: number }) {
       onDragEnd={endDrag}
       onDoubleClick={() => usable && addAssetsToTimeline([asset.id])}
       onKeyDown={(e) => {
-        if (e.key === 'Enter' && usable) addAssetsToTimeline([asset.id]);
+        // Only Enter on the card itself: its buttons handle their own Enter.
+        if (e.key === 'Enter' && usable && e.target === e.currentTarget) addAssetsToTimeline([asset.id]);
       }}
       onContextMenu={(e) => openContextMenu(e, menu)}
       data-tip={asset.status === 'error' ? asset.error : asset.status === 'missing' ? 'File is offline — relink it' : undefined}

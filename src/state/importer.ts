@@ -16,7 +16,7 @@ import { categorize, normalizeImageFile, probeAV, ProbeError } from '@/media/pro
 import { media, MAX_IMAGE_DIM } from '@/media/registry';
 import { makeImageThumb } from '@/media/imageThumb';
 import { probeAnimation } from '@/media/animatedImage';
-import { putPeaks, putThumbs } from '@/storage/db';
+import { getProjectMeta, loadProject as loadProjectRecord, putPeaks, putThumbs, saveProject } from '@/storage/db';
 import { DIRS, getFile, opfsUsable, requestPersistence } from '@/storage/opfs';
 import { restoreNoiseReduction } from './denoiseTools';
 import { editor, toast, usePlayback } from './store';
@@ -153,11 +153,28 @@ async function startBackgroundWork(asset: Asset, file: File) {
   const wantAudio = !!asset.audio;
   if (!wantCopy && !wantThumbs && !wantAudio) return;
   media.setProgress(id, { stage: wantAudio ? 'audio' : wantThumbs ? 'thumbs' : 'copy', value: 0 });
+  const projectId = editor().project.id;
   const job = analysis.analyze(id, file, { copy: wantCopy, thumbs: wantThumbs, audio: wantAudio }, (stage, value) =>
     media.setProgress(id, { stage, value }),
   );
   job.promise
     .then(async (res) => {
+      // Thumbnails and waveforms are stored per asset, whichever project is open now.
+      if (res.peaks) await putPeaks({ assetId: id, rate: res.peaks.rate, data: res.peaks.data });
+      if (res.thumbs) await putThumbs({ assetId: id, ...res.thumbs });
+      if (editor().project.id !== projectId) {
+        // The user switched projects meanwhile: record the result in the saved one, so its
+        // media isn't offline (and its audio isn't re-prepared) when it's opened again.
+        const saved = await loadProjectRecord(projectId);
+        const meta = await getProjectMeta(projectId);
+        const a = saved?.assets[id];
+        if (saved && meta && a) {
+          if (res.stored) a.stored = true;
+          if (res.pcm && !res.pcmBuffer && a.audio) a.audio.conformed = true;
+          await saveProject(saved, meta);
+        }
+        return;
+      }
       if (!editor().project.assets[id]) return;
       if (res.stored) {
         updateAsset(id, { stored: true });
@@ -180,16 +197,8 @@ async function startBackgroundWork(asset: Asset, file: File) {
       } else if (res.audioError) {
         audioUnusable(id, res.audioError);
       }
-      if (res.peaks) {
-        const pk = { assetId: id, rate: res.peaks.rate, data: res.peaks.data };
-        await putPeaks(pk);
-        media.setPeaks(id, pk);
-      }
-      if (res.thumbs) {
-        const t = { assetId: id, ...res.thumbs };
-        await putThumbs(t);
-        media.setThumbs(id, t);
-      }
+      if (res.peaks) media.setPeaks(id, { assetId: id, rate: res.peaks.rate, data: res.peaks.data });
+      if (res.thumbs) media.setThumbs(id, { assetId: id, ...res.thumbs });
     })
     .catch((e) => {
       if (String(e?.message) !== 'cancelled') console.warn('Background analysis failed', e);

@@ -29,6 +29,7 @@ import {
   projectDuration,
   scaledCaptionStyle,
 } from '@/core/project';
+import { evalProp, setStaticValue } from '@/core/keyframes';
 import { TEXT_PRESETS } from '@/core/textPresets';
 import { DEFAULT_TRANSITION_DURATION } from '@/core/transitions';
 import type { Clip, ShapeKind, VideoClip, Project } from '@/core/types';
@@ -431,10 +432,27 @@ export function freezeFrame() {
     const c = d.clips[target.id] as VideoClip;
     const srcT = c.sourceIn + (tq - c.start) * c.speed;
     const hold = 2;
-    // Split at the playhead and push the remainder right by the freeze length.
+    // Split at the playhead and push the remainder right by the freeze length; what comes
+    // later on the other unlocked tracks moves too, so it stays in sync.
     if (tq > c.start + 1e-6 && tq < clipEnd(c) - 1e-6) splitAt(d, tq, [c.id]);
-    shiftTrackFrom(d, c.trackId, tq, hold);
-    const still: VideoClip = { ...deepClone(c), id: uid('clp'), start: tq, duration: hold, sourceIn: srcT, freeze: true, muted: true, transitionOut: undefined, keyframes: {}, name: `${c.name} (freeze)` };
+    for (const tr of d.tracks) if (tr.id === c.trackId || !tr.locked) shiftTrackFrom(d, tr.id, tq, hold);
+    for (const m of d.markers) if (m.t >= tq) m.t += hold;
+    const still: VideoClip = {
+      ...deepClone(c),
+      id: uid('clp'),
+      start: tq,
+      duration: hold,
+      sourceIn: srcT,
+      freeze: true,
+      muted: true,
+      transitionOut: undefined,
+      keyframes: {},
+      animIn: { ...c.animIn, preset: 'none' },
+      animOut: { ...c.animOut, preset: 'none' },
+      name: `${c.name} (freeze)`,
+    };
+    // The still holds the picture exactly as it was at that moment, animated values included.
+    for (const path of Object.keys(target.keyframes)) setStaticValue(still, path, evalProp(target, path, tq - target.start));
     d.clips[still.id] = still;
     id = still.id;
   });

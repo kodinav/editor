@@ -93,6 +93,10 @@ export class PreviewSources implements FrameSources {
 
   /** Warm up readers for clips about to start (avoids a stall at cuts). `playing` clips are left alone. */
   preroll(desc: FrameDesc, playing: Set<string> = new Set()) {
+    // Photos decode on first use: start that now so they don't pop in late.
+    for (const l of desc.layers) {
+      if (l.type === 'clip' && l.source.kind === 'image') void media.loadImage(l.source.assetId);
+    }
     for (const w of videoSourcesIn(desc)) {
       if (playing.has(w.key)) continue;
       const e = this.entry(w.key, w.assetId);
