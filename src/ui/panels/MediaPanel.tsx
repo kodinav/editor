@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { AlertTriangle, AudioLines, Film, Image as ImageIcon, Link2, Mic, MoreHorizontal, Plus, Search, Trash2, Type, Upload } from 'lucide-react';
+import { AlertTriangle, AudioLines, Film, Image as ImageIcon, Link2, Mic, MoreHorizontal, Plus, Search, Trash2, Type, Upload, Play } from 'lucide-react';
 import type { Asset } from '@/core/types';
 import { formatDuration } from '@/core/time';
 import { media } from '@/media/registry';
@@ -127,6 +127,9 @@ function AssetCard({ asset, uses }: { asset: Asset; uses: number }) {
 
   const menu: MenuItem[] = [
     { label: 'Add to timeline at playhead', icon: <Plus size={14} />, disabled: !usable, onClick: () => addAssetsToTimeline([asset.id]) },
+    ...(asset.kind === 'video' || asset.kind === 'audio'
+      ? [{ label: 'Preview and choose a part…', icon: <Play size={14} />, disabled: !usable, onClick: () => editor().set('sourcePreview', asset.id) }]
+      : []),
     { label: 'Relink file…', icon: <Link2 size={14} />, onClick: () => void relink(asset) },
     { kind: 'separator' },
     { label: uses ? `Remove (used ${uses}×)` : 'Remove from project', icon: <Trash2 size={14} />, danger: true, onClick: () => removeAsset(asset, uses) },
@@ -141,6 +144,7 @@ function AssetCard({ asset, uses }: { asset: Asset; uses: number }) {
       aria-label={`${asset.name}, ${asset.kind}${asset.duration ? `, ${formatDuration(asset.duration)}` : ''}${asset.status !== 'ready' ? `, ${asset.status}` : ''}`}
       onDragStart={(e) => startDrag(e, { kind: 'assets', ids: [asset.id] })}
       onDragEnd={endDrag}
+      onClick={() => usable && (asset.kind === 'video' || asset.kind === 'audio') && editor().set('sourcePreview', asset.id)}
       onDoubleClick={() => usable && addAssetsToTimeline([asset.id])}
       onKeyDown={(e) => {
         // Only Enter on the card itself: its buttons handle their own Enter.
@@ -182,7 +186,14 @@ function AssetCard({ asset, uses }: { asset: Asset; uses: number }) {
         <span className="ellipsis grow" title={asset.name}>
           {asset.name}
         </span>
-        <button className="icon-btn tiny" aria-label={`More options for ${asset.name}`} onClick={(e) => openMenuBelow(e.currentTarget, menu, 'right')}>
+        <button
+          className="icon-btn tiny"
+          aria-label={`More options for ${asset.name}`}
+          onClick={(e) => {
+            e.stopPropagation();
+            openMenuBelow(e.currentTarget, menu, 'right');
+          }}
+        >
           <MoreHorizontal size={14} />
         </button>
       </div>

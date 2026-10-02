@@ -897,3 +897,26 @@ test('on a phone, Edit opens without a selection and Record audio opens the reco
   await page.getByRole('button', { name: 'Record audio' }).click();
   await expect(page.getByRole('region', { name: 'Voiceover recorder' })).toBeVisible();
 });
+
+test('media can be previewed and just a chosen part added to the timeline', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4', 'red.mp4']); // first import lays both out; we add another part below
+  await waitForMediaReady(page);
+  const before = (await state(page)).clips.length;
+  await page.getByRole('listitem', { name: /landscape\.mp4/ }).click();
+  const monitor = page.getByRole('region', { name: /Source preview: landscape\.mp4/ });
+  await expect(monitor).toBeVisible();
+  // The picture really loads (not just the controls).
+  await page.waitForFunction(() => ((document.querySelector('.source-media video') as HTMLVideoElement | null)?.videoWidth ?? 0) > 0);
+  await page.getByRole('slider', { name: 'Position in source' }).fill('2');
+  await page.keyboard.press('i');
+  await page.getByRole('slider', { name: 'Position in source' }).fill('5');
+  await page.keyboard.press('o');
+  await monitor.getByRole('button', { name: /Add to timeline/ }).click();
+  await expect(monitor).toHaveCount(0); // back to the program view
+  const s = await state(page);
+  expect(s.clips.length).toBe(before + 1);
+  const added = s.clips.find((c) => c.id === s.selection[0]);
+  expect(added.sourceIn).toBeCloseTo(2, 1);
+  expect(added.duration).toBeCloseTo(3, 1);
+});

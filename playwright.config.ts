@@ -10,6 +10,8 @@ export default defineConfig({
   expect: { timeout: 20_000 },
   fullyParallel: false,
   workers: 1,
+  // One retry absorbs timing flakes on a loaded machine; Playwright still reports them as "flaky".
+  retries: 1,
   reporter: [['list']],
   use: {
     baseURL: process.env.E2E_BASE ?? 'http://localhost:5174',

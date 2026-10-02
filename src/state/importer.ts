@@ -226,7 +226,8 @@ export function clipForAsset(p: Project, asset: Asset, trackId: string, start: n
  * Add assets to the timeline, one after another, starting at `time`.
  * Returns the created clip ids.
  */
-export function addAssetsToTimeline(assetIds: string[], time?: number, trackId?: string): string[] {
+/** `range`: only that part of the (single) asset's media, e.g. chosen in the source preview. */
+export function addAssetsToTimeline(assetIds: string[], time?: number, trackId?: string, range?: { start: number; end: number }): string[] {
   const created: string[] = [];
   editor().commit(assetIds.length > 1 ? 'Add media' : 'Add clip', (d) => {
     // Visual media is laid out one after another; audio gets its own cursor so
@@ -239,11 +240,16 @@ export function addAssetsToTimeline(assetIds: string[], time?: number, trackId?:
       if (!asset || asset.status === 'error' || asset.kind === 'font') continue;
       const kind = asset.kind === 'audio' ? 'audio' : 'video';
       const t = kind === 'audio' ? tAudio : tVisual;
-      const dur = asset.kind === 'image' ? Math.max(DEFAULT_IMAGE_DURATION, asset.image?.animated ? asset.duration : 0) : asset.duration;
+      const part = range && (asset.kind === 'video' || asset.kind === 'audio') ? range : null;
+      const dur = part ? part.end - part.start : asset.kind === 'image' ? Math.max(DEFAULT_IMAGE_DURATION, asset.image?.animated ? asset.duration : 0) : asset.duration;
       let track = trackId ? d.tracks.find((x) => x.id === trackId && x.kind === kind) : undefined;
       if (!track || track.locked) track = findOrCreateTrack(d, kind, t, t + dur, kind === 'video' ? lowestVideoTrack(d) : undefined);
       const clip = clipForAsset(d, asset, track.id, t);
       if (!clip) continue;
+      if (part && (clip.type === 'video' || clip.type === 'audio')) {
+        clip.sourceIn = q(d, part.start);
+        clip.duration = Math.max(1 / d.settings.fps, q(d, part.end - part.start));
+      }
       d.clips[clip.id] = clip;
       created.push(clip.id);
       makeRoomFor(d, [clip.id], 'overwrite');

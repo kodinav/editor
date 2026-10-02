@@ -23,6 +23,7 @@ import * as A from '@/state/actions';
 import { openMenuBelow } from '../common/Menu';
 import { openImportPicker } from '../importPicker';
 import { Gizmo } from './Gizmo';
+import { SourceMonitor } from './SourceMonitor';
 import { FormatShape } from '../common/FormatShape';
 import { usePreviewDrop } from './PreviewDrop';
 import { applyTemplate, TEMPLATES } from '@/state/templates';
@@ -34,6 +35,7 @@ export function PreviewPane({ compact }: { compact?: boolean }) {
   const height = useEditor((s) => s.project.settings.height);
   const empty = useEditor((s) => Object.keys(s.project.clips).length === 0);
   const showSafe = useEditor((s) => s.showSafeArea);
+  const sourcePreview = useEditor((s) => s.sourcePreview);
   const error = usePreviewInfo((s) => s.error);
   const [box, setBox] = useState({ w: 0, h: 0, left: 0, top: 0 });
   const drop = usePreviewDrop();
@@ -73,7 +75,8 @@ export function PreviewPane({ compact }: { compact?: boolean }) {
           {showSafe && <div className="safe-area" aria-hidden="true" />}
           <Gizmo stageW={box.w} stageH={box.h} />
         </div>
-        {empty && <EmptyState />}
+        {empty && !sourcePreview && <EmptyState />}
+        {sourcePreview && <SourceMonitor assetId={sourcePreview} />}
         {error && (
           <div className="preview-error callout err" role="alert">
             {error} Try a recent version of Chrome, Edge, Firefox or Safari with hardware acceleration enabled.

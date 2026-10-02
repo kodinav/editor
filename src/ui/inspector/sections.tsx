@@ -931,6 +931,25 @@ export function TimingSection({ clip }: { clip: Clip }) {
       <Row label="Duration">
         <TimecodeField label="Clip duration" value={clip.duration} fps={fps} onCommit={(t) => editor().commit('Trim clip', (d) => trimEnd(d, clip.id, clip.start + Math.max(0, t)))} />
       </Row>
+      {(clip.type === 'video' || clip.type === 'audio') && (
+        <Row label={clip.type === 'video' && clip.freeze ? 'Frame' : 'Source in'}>
+          {/* Slip: choose which part of the media plays, keeping the clip where it is. */}
+          <TimecodeField
+            label={clip.type === 'video' && clip.freeze ? 'Frozen frame' : 'Source in'}
+            value={clip.sourceIn}
+            fps={fps}
+            onCommit={(t) =>
+              editor().commit('Slip clip', (d) => {
+                const c = d.clips[clip.id];
+                if (!c || (c.type !== 'video' && c.type !== 'audio')) return;
+                const media = d.assets[c.assetId]?.duration ?? 0;
+                const span = c.type === 'video' && c.freeze ? 0 : c.duration * c.speed;
+                c.sourceIn = Math.max(0, Math.min(t, Math.max(0, media - span)));
+              })
+            }
+          />
+        </Row>
+      )}
     </Section>
   );
 }

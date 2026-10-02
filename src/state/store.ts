@@ -67,6 +67,8 @@ export interface EditorState {
   showSafeArea: boolean;
   /** Crop handles are shown on the canvas for the selected clip. */
   cropMode: boolean;
+  /** Asset shown in the source preview (watch and choose a part before adding). */
+  sourcePreview: string | null;
   loop: boolean;
   /** True when the open project failed to acquire the cross-tab lock. */
   readOnlyReason: string | null;
@@ -158,6 +160,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   previewQuality: 'auto',
   showSafeArea: false,
   cropMode: false,
+  sourcePreview: null,
   loop: false,
   readOnlyReason: null,
 
@@ -336,7 +339,8 @@ export const useEditor = create<EditorState>()((set, get) => ({
     } else {
       next = ids;
     }
-    set({ selection: next, selectedKeyframe: null, selectedTransition: null, cropMode: false });
+    // Working on the timeline again: the program view comes back from any source preview.
+    set({ selection: next, selectedKeyframe: null, selectedTransition: null, cropMode: false, sourcePreview: null });
   },
 
   set(key, value) {
