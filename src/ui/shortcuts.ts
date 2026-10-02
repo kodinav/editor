@@ -206,6 +206,28 @@ function openContextMenuFromKeyboard(): boolean {
   return true;
 }
 
+/**
+ * Single-character shortcuts (S, T, 1, ?) can fire by accident for speech-input and
+ * tremor users; they can be turned off (WCAG 2.1.4). Space, arrows and anything with
+ * Ctrl/⌘/Alt keep working.
+ */
+const SINGLE_KEY_PREF = 'cutline.singleKeyShortcuts';
+export function singleKeyShortcuts(): boolean {
+  try {
+    return localStorage.getItem(SINGLE_KEY_PREF) !== 'off';
+  } catch {
+    return true;
+  }
+}
+export function setSingleKeyShortcuts(on: boolean) {
+  try {
+    localStorage.setItem(SINGLE_KEY_PREF, on ? 'on' : 'off');
+  } catch {
+    /* not persisted */
+  }
+}
+const isCharacterKey = (combo: string) => !/^(mod|alt|ctrl)\+/.test(combo) && /^(shift\+)?(.|plus)$/.test(combo);
+
 export function installShortcuts(): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (e.defaultPrevented) return;
@@ -221,6 +243,7 @@ export function installShortcuts(): () => void {
     const target = e.target as HTMLElement;
     // Space/Enter on a focused button should activate the button, not play.
     if ((combos[0] === 'space' || combos[0] === 'enter') && target.tagName === 'BUTTON') return;
+    if (!singleKeyShortcuts() && combos.every(isCharacterKey)) return;
     for (const s of SHORTCUTS) {
       if (combos.some((c) => s.combos.includes(c))) {
         if (e.repeat && !s.repeat) {

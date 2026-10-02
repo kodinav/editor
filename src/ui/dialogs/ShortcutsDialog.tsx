@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { editor } from '@/state/store';
+import { Switch } from '../common/fields';
 import { Modal } from '../common/Modal';
-import { SHORTCUTS, type Shortcut } from '../shortcuts';
+import { setSingleKeyShortcuts, SHORTCUTS, singleKeyShortcuts, type Shortcut } from '../shortcuts';
 
 export default function ShortcutsDialog() {
   const groups = new Map<Shortcut['group'], Shortcut[]>();
@@ -9,8 +11,25 @@ export default function ShortcutsDialog() {
     arr.push(s);
     groups.set(s.group, arr);
   }
+  const [single, setSingle] = useState(singleKeyShortcuts);
   return (
     <Modal title="Keyboard shortcuts" wide onClose={() => editor().set('dialog', null)}>
+      <div className="row" style={{ gap: 10, marginBottom: 12 }}>
+        <Switch
+          checked={single}
+          label="Single-key shortcuts"
+          onChange={(v) => {
+            setSingleKeyShortcuts(v);
+            setSingle(v);
+          }}
+        />
+        <span>
+          <strong>Single-key shortcuts</strong>
+          <span className="subtle" style={{ display: 'block', fontSize: 12 }}>
+            Letters, numbers and symbols on their own (like S or T). Turn off if they trigger by accident; Space, arrows and shortcuts with ⌘/Ctrl/Alt keep working.
+          </span>
+        </span>
+      </div>
       <div className="shortcut-cols">
         {[...groups.entries()].map(([g, list]) => (
           <section key={g}>

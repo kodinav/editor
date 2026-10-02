@@ -920,3 +920,15 @@ test('media can be previewed and just a chosen part added to the timeline', asyn
   expect(added.sourceIn).toBeCloseTo(2, 1);
   expect(added.duration).toBeCloseTo(3, 1);
 });
+
+test('single-key shortcuts can be turned off (WCAG 2.1.4)', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('Shift+?');
+  await page.getByRole('switch', { name: 'Single-key shortcuts' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('dialog')).toHaveCount(0);
+  await page.keyboard.press('t'); // would add a title
+  expect((await state(page)).clips).toHaveLength(0);
+  await page.keyboard.press('ControlOrMeta+e'); // shortcuts with a modifier still work
+  await expect(page.getByRole('dialog')).toBeVisible();
+});
