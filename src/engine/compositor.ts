@@ -457,8 +457,10 @@ export class Compositor {
         const m = pad / pxScale;
         quad = { ...g, vis: { x0: g.vis.x0 - m, y0: g.vis.y0 - m, x1: g.vis.x1 + m, y1: g.vis.y1 + m } };
       } else this.pass(this.prog('copy', S.COPY_FS), src.tex, rt, () => {}, uv);
+      // Where the layer's own pixels sit inside the (possibly padded) canvas, for masks.
+      const content = [pad / rt.w, pad / rt.h, pw / rt.w, ph / rt.h] as const;
       if (!isNeutralColor(l.color)) rt = this.colorPass(rt, l.color);
-      for (const fx of l.effects) rt = this.applyEffect(fx, rt, pxScale, l.localTime);
+      for (const fx of l.effects) rt = this.applyEffect(fx, rt, pxScale, l.localTime, content);
       if (l.animBlur > 0.5) rt = this.blur(rt, l.animBlur * 0.5 * pxScale);
       processed = rt;
       tex = rt.tex;
@@ -553,12 +555,14 @@ export class Compositor {
     if (!isNeutralColor(l.color)) rt = this.colorPass(rt, l.color);
     const pxScale = acc.w / this.W;
     for (const fx of l.effects) rt = this.applyEffect(fx, rt, pxScale, l.localTime);
-    if (l.opacity >= 0.999) {
+    // A mask limits where the adjustment applies: lay the adjusted picture over the original.
+    const masked = l.effects.some((fx) => fx.type === 'mask');
+    if (l.opacity >= 0.999 && !masked) {
       this.pool.release(acc);
       return rt;
     }
     const out = this.pool.acquire(acc.w, acc.h);
-    this.pass(this.prog('mix', S.MIX_FS), acc.tex, out, (p) => {
+    this.pass(masked ? this.prog('over', S.OVER_FS) : this.prog('mix', S.MIX_FS), acc.tex, out, (p) => {
       this.bindTex(1, rt.tex);
       p.i1('uOther', 1);
       p.f1('uAmount', l.opacity);
@@ -653,7 +657,7 @@ export class Compositor {
   /** How far (project px) this layer's blur/glow can spread beyond its edges; 0 for opaque layers. */
   private spreadOf(l: ClipLayer): number {
     const s = l.source;
-    const transparent = s.kind === 'text' || s.kind === 'shape' || (s.kind === 'image' && s.alpha);
+    const transparent = s.kind === 'text' || s.kind === 'shape' || (s.kind === 'image' && s.alpha) || l.effects.some((fx) => fx.type === 'mask');
     if (!transparent) return 0;
     let spread = l.animBlur * 1.5;
     for (const fx of l.effects) {
@@ -679,7 +683,7 @@ export class Compositor {
   }
 
   /** pxScale: processing pixels per project pixel (keeps effects resolution-independent). */
-  private applyEffect(fx: ResolvedEffect, rt: RenderTarget, pxScale: number, localTime: number): RenderTarget {
+  private applyEffect(fx: ResolvedEffect, rt: RenderTarget, pxScale: number, localTime: number, content: readonly number[] = [0, 0, 1, 1]): RenderTarget {
     const n = (k: string) => this.num(fx, k);
     switch (fx.type) {
       case 'blur':
@@ -780,6 +784,18 @@ export class Compositor {
           p.f1('uSoftness', n('softness') / 100);
           p.i1('uInvert', fx.params.invert ? 1 : 0);
         });
+      case 'mask': {
+        const shortSide = Math.min(content[2] * rt.w, content[3] * rt.h);
+        return this.simple(rt, 'mask', S.MASK_FS, (p) => {
+          p.f4('uContent', content[0], content[1], content[2], content[3]);
+          p.f2('uCenter', n('x') / 100, n('y') / 100);
+          p.f2('uHalf', n('width') / 200, n('height') / 200);
+          p.f1('uFeather', (n('feather') / 100) * 0.5 * shortSide);
+          p.f1('uRound', Math.min(1, Math.max(0, n('roundness') / 100)));
+          p.i1('uShape', this.str(fx, 'shape') === 'ellipse' ? 1 : 0);
+          p.i1('uInvert', fx.params.invert ? 1 : 0);
+        });
+      }
       default:
         return rt;
     }

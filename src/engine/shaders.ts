@@ -460,3 +460,40 @@ export const TRANSITION_FS: Record<string, string> = {
     vec4 b = B(0.5 + (rb * c) / asp / zB);
     outColor = mix(a, b, smoothstep(0.4, 0.6, p));`),
 };
+
+/** Rectangle / ellipse mask. Coordinates are relative to the layer's content rect (uContent, in uv). */
+export const MASK_FS = HEAD + /* glsl */ `
+uniform vec4 uContent;
+uniform vec2 uCenter, uHalf;
+uniform float uFeather, uRound;
+uniform int uShape, uInvert;
+void main() {
+  vec4 c = texture(uTex, vUV);
+  vec2 sizePx = uContent.zw * uTexSize;
+  vec2 p = ((vUV - uContent.xy) / uContent.zw - uCenter) * sizePx;
+  vec2 h = max(uHalf * sizePx, vec2(0.5));
+  float d;
+  if (uShape == 1) {
+    // Ellipse: first-order distance estimate (exact on the axes, close elsewhere).
+    float k0 = length(p / h);
+    float k1 = length(p / (h * h));
+    d = k1 > 1e-6 ? k0 * (k0 - 1.0) / k1 : -min(h.x, h.y);
+  } else {
+    float r = uRound * min(h.x, h.y);
+    vec2 q = abs(p) - h + r;
+    d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+  }
+  float w = max(uFeather, 1.0);
+  float m = 1.0 - smoothstep(-0.5 * w, 0.5 * w, d);
+  if (uInvert == 1) m = 1.0 - m;
+  outColor = c * m;
+}`;
+
+/** Premultiplied "over": uOther (scaled by uAmount) on top of uTex. */
+export const OVER_FS = HEAD + /* glsl */ `
+uniform sampler2D uOther;
+uniform float uAmount;
+void main() {
+  vec4 b = texture(uOther, vUV) * uAmount;
+  outColor = b + texture(uTex, vUV) * (1.0 - b.a);
+}`;

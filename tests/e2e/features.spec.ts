@@ -932,3 +932,73 @@ test('single-key shortcuts can be turned off (WCAG 2.1.4)', async ({ page }) => 
   await page.keyboard.press('ControlOrMeta+e'); // shortcuts with a modifier still work
   await expect(page.getByRole('dialog')).toBeVisible();
 });
+
+test('a mask shows only part of a layer, and limits where an adjustment layer applies', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['blue.mp4']);
+  await waitForMediaReady(page);
+  await importFiles(page, ['red.mp4']);
+  await waitForMediaReady(page);
+  await page.getByRole('button', { name: 'Add red.mp4 to timeline' }).click();
+  await commit(page, (d) => {
+    const tracks = d.tracks.filter((t: any) => t.kind === 'video');
+    const red: any = Object.values(d.clips).find((c: any) => c.name === 'red.mp4');
+    red.trackId = tracks[0].id;
+    red.start = 0;
+    red.duration = 2;
+  });
+  await page.evaluate(() => {
+    const s = (window as any).__cutline.editor.getState();
+    const red: any = Object.values(s.project.clips).find((c: any) => c.name === 'red.mp4');
+    s.select([red.id]);
+  });
+  const library = page.getByRole('tablist', { name: 'Library' });
+  await library.getByRole('tab', { name: 'Effects' }).click();
+  await page.getByRole('button', { name: /^Mask/ }).click();
+  const fx = await page.evaluate(() => {
+    const s = (window as any).__cutline.editor.getState();
+    const red: any = Object.values(s.project.clips).find((c: any) => c.name === 'red.mp4');
+    return red.effects.map((e: any) => e.type);
+  });
+  expect(fx).toEqual(['mask']);
+  // A rectangle in the top-left quarter: red there, the blue track below everywhere else.
+  await commit(page, (d) => {
+    const red: any = Object.values(d.clips).find((c: any) => c.name === 'red.mp4');
+    Object.assign(red.effects[0].params, { x: 25, y: 25, width: 50, height: 50, feather: 0 });
+  });
+  let file = await exportVia(page, out('mask-rect.mp4'));
+  expect(near(regionColor(file, 1, 0.2, 0.2), [255, 0, 0], 60)).toBe(true);
+  expect(near(regionColor(file, 1, 0.75, 0.2), [0, 15, 255], 60)).toBe(true);
+  expect(near(regionColor(file, 1, 0.2, 0.75), [0, 15, 255], 60)).toBe(true);
+  // An inverted ellipse cuts a hole in the middle instead.
+  await commit(page, (d) => {
+    const red: any = Object.values(d.clips).find((c: any) => c.name === 'red.mp4');
+    Object.assign(red.effects[0].params, { shape: 'ellipse', x: 50, y: 50, width: 40, height: 40, invert: true });
+  });
+  file = await exportVia(page, out('mask-ellipse.mp4'));
+  expect(near(regionColor(file, 1, 0.47, 0.47, 0.06, 0.06), [0, 15, 255], 60)).toBe(true);
+  expect(near(regionColor(file, 1, 0.02, 0.02), [255, 0, 0], 60)).toBe(true);
+  // Ellipse, not rectangle: the box's corner (inside a rectangle mask) stays red.
+  expect(near(regionColor(file, 1, 0.31, 0.31, 0.02, 0.02), [255, 0, 0], 60)).toBe(true);
+
+  // Adjustment layer: invert colours on the left half of the frame only.
+  await commit(page, (d) => {
+    const red: any = Object.values(d.clips).find((c: any) => c.name === 'red.mp4');
+    delete d.clips[red.id];
+  });
+  await page.keyboard.press('Escape'); // close the export dialog
+  await library.getByRole('tab', { name: 'Elements' }).click();
+  await page.getByRole('button', { name: /Adjustment layer/ }).click();
+  await commit(page, (d) => {
+    const adj: any = Object.values(d.clips).find((c: any) => c.type === 'adjustment');
+    adj.start = 0;
+    adj.duration = 2;
+    adj.effects = [
+      { id: 'i', type: 'invert', enabled: true, params: { amount: 100 } },
+      { id: 'm', type: 'mask', enabled: true, params: { shape: 'rectangle', x: 25, y: 50, width: 50, height: 200, feather: 0, roundness: 0, invert: false } },
+    ];
+  });
+  file = await exportVia(page, out('mask-adjust.mp4'));
+  expect(near(regionColor(file, 1, 0.2, 0.5), [255, 240, 0], 60)).toBe(true); // blue inverted → yellow
+  expect(near(regionColor(file, 1, 0.75, 0.5), [0, 15, 255], 60)).toBe(true); // untouched, not black
+});

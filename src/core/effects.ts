@@ -228,6 +228,31 @@ export const EFFECTS: EffectDef[] = [
       { key: 'invert', label: 'Key out brights', kind: 'boolean', default: false },
     ],
   },
+  {
+    type: 'mask',
+    name: 'Mask',
+    category: 'Keying',
+    description: 'Show only a rectangle or ellipse of the layer (or hide it with Invert). On an adjustment layer, limits where the adjustment applies.',
+    params: [
+      {
+        key: 'shape',
+        label: 'Shape',
+        kind: 'select',
+        default: 'rectangle',
+        options: [
+          { value: 'rectangle', label: 'Rectangle' },
+          { value: 'ellipse', label: 'Ellipse' },
+        ],
+      },
+      n('x', 'Center X', 0, 100, 0.5, 50, '%'),
+      n('y', 'Center Y', 0, 100, 0.5, 50, '%'),
+      n('width', 'Width', 1, 200, 0.5, 60, '%'),
+      n('height', 'Height', 1, 200, 0.5, 60, '%'),
+      n('feather', 'Feather', 0, 100, 1, 10, '%'),
+      n('roundness', 'Roundness', 0, 100, 1, 0, '%'),
+      { key: 'invert', label: 'Invert', kind: 'boolean', default: false },
+    ],
+  },
 ];
 
 export const EFFECT_MAP: Record<string, EffectDef> = Object.fromEntries(EFFECTS.map((e) => [e.type, e]));
