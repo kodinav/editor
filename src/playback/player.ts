@@ -6,7 +6,7 @@ import { snapToFrame } from '@/core/time';
 import { Compositor } from '@/engine/compositor';
 import { onFontLoaded } from '@/engine/fonts';
 import { media } from '@/media/registry';
-import { editor, useEditor, usePlayback } from '@/state/store';
+import { editor, toast, useEditor, usePlayback } from '@/state/store';
 import { AudioEngine } from './audioEngine';
 import { PreviewSources } from './previewSources';
 
@@ -49,6 +49,15 @@ class Player {
 
   constructor() {
     this.sources.onFrameReady = () => this.requestRender();
+    // Say when footage can't be decoded instead of silently showing nothing.
+    const reported = new Set<string>();
+    this.sources.onError = (_clipId, assetId, err) => {
+      const key = `${editor().project.id}:${assetId}`;
+      if (reported.has(key)) return;
+      reported.add(key);
+      const name = editor().project.assets[assetId]?.name ?? 'A video';
+      toast({ kind: 'warning', message: `“${name}” couldn’t be decoded here.`, detail: `The file may be damaged; those frames stay blank. (${String((err as Error)?.message ?? err)})`, timeout: 10000 });
+    };
     // Re-render on any project change while paused.
     useEditor.subscribe((s, prev) => {
       if (s.project !== prev.project || s.previewQuality !== prev.previewQuality) this.requestRender();
@@ -118,15 +127,27 @@ class Player {
     return p.inPoint ?? 0;
   }
 
-  async play() {
+  /** L: play, and each further press doubles the speed (up to 4×). */
+  shuttleForward() {
+    if (!this.playing) {
+      void this.play();
+      return;
+    }
+    const rate = Math.min(4, usePlayback.getState().rate * 2);
+    const t = this.audio.time();
+    usePlayback.getState().set({ rate });
+    void this.audio.start(t, rate);
+  }
+
+  async play(rate = 1) {
     if (this.playing) return;
     let t = usePlayback.getState().time;
     const end = this.endTime();
     if (end <= 0) return;
     if (t >= end - 1e-3 || t < this.startTime() - 1e-3) t = this.startTime();
-    usePlayback.getState().set({ playing: true, time: t });
+    usePlayback.getState().set({ playing: true, time: t, rate });
     try {
-      await this.audio.start(t);
+      await this.audio.start(t, rate);
     } catch (e) {
       console.warn('Audio failed to start', e);
     }
@@ -140,7 +161,7 @@ class Player {
     const t = this.audio.time();
     this.audio.stop();
     cancelAnimationFrame(this.raf);
-    usePlayback.getState().set({ playing: false, time: snapToFrame(t, editor().project.settings.fps) });
+    usePlayback.getState().set({ playing: false, rate: 1, time: snapToFrame(t, editor().project.settings.fps) });
     this.requestRender();
   }
 
@@ -155,7 +176,7 @@ class Player {
     if (wasPlaying) {
       this.audio.stop();
       usePlayback.getState().set({ time: t });
-      void this.audio.start(t);
+      void this.audio.start(t, usePlayback.getState().rate);
     } else {
       usePlayback.getState().set({ time: t });
       if (opts.scrub) void this.audio.scrub(t);

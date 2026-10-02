@@ -18,7 +18,7 @@ import {
   type VideoCodec,
   type VideoSample,
 } from 'mediabunny';
-import { evaluateFrame, videoSourcesIn } from '@/core/evaluate';
+import { evaluateFrame, imageAssetsIn, videoSourcesIn } from '@/core/evaluate';
 import type { Project } from '@/core/types';
 import { AudioMixer } from '@/engine/audioMixer';
 import { Compositor, type FrameSources } from '@/engine/compositor';
@@ -66,33 +66,67 @@ class ExportSources implements FrameSources {
   opening = new Map<string, Promise<void>>();
   images = new Map<string, ImageBitmap>();
   animations = new Map<string, AnimatedImage>();
-  constructor(private files: Record<string, File>) {}
+  private loading = new Map<string, Promise<void>>();
+  /** Last timeline time each image asset is used (so it can be freed once passed). */
+  private lastUse = new Map<string, number>();
+  /**
+   * `maxDim`: photos are decoded no larger than this (twice the export size is plenty even
+   * for a zoom), and only while they're on screen, so long slideshows stay within memory.
+   */
+  constructor(
+    private files: Record<string, File>,
+    private maxDim = 8192,
+  ) {}
 
   video = (clipId: string): VideoSample | null => this.readers.get(clipId)?.reader.current ?? null;
   image = (assetId: string, time: number): ImageBitmap | null => this.animations.get(assetId)?.frameAt(time) ?? this.images.get(assetId) ?? null;
 
-  async loadImages(p: Project) {
-    for (const a of Object.values(p.assets)) {
-      if (a.kind !== 'image' || !this.files[a.id]) continue;
-      const used = Object.values(p.clips).some((c) => c.type === 'image' && c.assetId === a.id);
-      if (!used) continue;
+  /** Note where each image is last needed in the exported range. */
+  planImages(p: Project, start: number, end: number) {
+    for (const c of Object.values(p.clips)) {
+      if (c.type !== 'image' || c.disabled || c.start >= end || c.start + c.duration <= start) continue;
+      this.lastUse.set(c.assetId, Math.max(this.lastUse.get(c.assetId) ?? 0, c.start + c.duration + 2));
+    }
+  }
+
+  private loadImage(p: Project, id: string): Promise<void> {
+    let op = this.loading.get(id);
+    if (op) return op;
+    const a = p.assets[id];
+    const file = this.files[id];
+    op = (async () => {
+      if (!a || !file) return;
       if (a.image?.animated) {
-        const anim = await AnimatedImage.decode(this.files[a.id]).catch(() => null);
+        const anim = await AnimatedImage.decode(file).catch(() => null);
         if (anim) {
-          this.animations.set(a.id, anim);
-          continue;
+          this.animations.set(id, anim);
+          return;
         }
       }
       try {
-        this.images.set(a.id, await decodeImage(this.files[a.id]));
+        this.images.set(id, await decodeImage(file, this.maxDim));
       } catch (e) {
         throw new Error(`The image “${a.name}” could not be prepared for export: ${(e as Error).message ?? e}`);
       }
-    }
+    })();
+    this.loading.set(id, op);
+    return op;
   }
 
   async prepare(p: Project, t: number) {
     const desc = evaluateFrame(p, t);
+    await Promise.all(imageAssetsIn(desc).map((id) => this.loadImage(p, id)));
+    // Free photos whose last appearance has passed (export time only moves forward).
+    for (const [id, until] of this.lastUse) {
+      if (t > until && this.loading.has(id)) {
+        this.images.get(id)?.close();
+        this.images.delete(id);
+        this.animations.get(id)?.close();
+        this.animations.delete(id);
+        this.loading.delete(id);
+        this.lastUse.delete(id);
+      }
+    }
     const active = new Set<string>();
     await Promise.all(
       videoSourcesIn(desc).map(async (w) => {
@@ -330,8 +364,8 @@ async function run(msg: ExportStartMessage) {
   for (const t of p.tracks) if (t.captionStyle) fontLoads.push(ensureFont(t.captionStyle.fontFamily, t.captionStyle.fontWeight, t.captionStyle.italic));
   await Promise.all(fontLoads);
 
-  const sources = new ExportSources(msg.files);
-  await sources.loadImages(p);
+  const sources = new ExportSources(msg.files, Math.min(8192, Math.max(o.width, o.height) * 2));
+  sources.planImages(p, o.start, o.end);
   const pcm = new Map<string, PcmSource>();
   for (const [id, info] of Object.entries(msg.pcm)) pcm.set(id, new PcmSource(id, info.file, info.sampleRate, info.channels));
   const mixer = new AudioMixer({ getPcm: (id, variant) => pcm.get(variant ? `${id}:${variant}` : id) }, 48000);

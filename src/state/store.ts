@@ -380,6 +380,8 @@ export interface PlaybackState {
   playing: boolean;
   /** Seconds of audio/video decode underrun in the last second (for a perf hint). */
   dropped: number;
+  /** Shuttle speed while playing (1 = normal). */
+  rate: number;
   set(p: Partial<Omit<PlaybackState, 'set'>>): void;
 }
 
@@ -387,5 +389,6 @@ export const usePlayback = create<PlaybackState>()((set) => ({
   time: 0,
   playing: false,
   dropped: 0,
+  rate: 1,
   set: (p) => set(p),
 }));

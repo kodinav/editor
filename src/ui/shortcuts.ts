@@ -71,7 +71,7 @@ const now = () => usePlayback.getState().time;
 
 export const SHORTCUTS: Shortcut[] = [
   sc('play', 'Playback', 'Play / pause', ['space'], () => player.toggle()),
-  sc('playL', 'Playback', 'Play', ['l'], () => void player.play()),
+  sc('playL', 'Playback', 'Play; press again for 2× and 4×', ['l'], () => player.shuttleForward()),
   sc('pauseK', 'Playback', 'Pause', ['k'], () => player.pause()),
   sc('backJ', 'Playback', 'Back 1 second', ['j'], () => player.seek(Math.max(0, now() - 1)), true),
   sc('frameBack', 'Playback', 'Previous frame', ['arrowleft'], () => player.step(-1), true),

@@ -673,6 +673,9 @@ test('clicking a layer drawn above the selected one selects it', async ({ page }
     return [ids[0], ids[ids.length - 1]];
   });
   await page.evaluate((id) => (window as any).__cutline.editor.getState().select([id]), bottom);
+  // The box follows the last rendered frame (fonts load first): let it settle.
+  await page.locator('polygon.gizmo-box').first().waitFor();
+  await page.waitForTimeout(500);
   const box = (await page.locator('polygon.gizmo-box').first().boundingBox())!;
   await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
   expect((await state(page)).selection).toEqual([top]);
@@ -799,4 +802,39 @@ test('blur on a title spreads past the letters instead of being cut off at their
   const blurred = await extent(40);
   expect(sharp).toBeGreaterThan(10);
   expect(blurred).toBeGreaterThan(sharp + 15); // clipped at the text box it reached only ~+7
+});
+
+test('a clip’s start and duration can be typed', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4']); // 30 fps project
+  await waitForMediaReady(page);
+  await selectFirst(page, 'video');
+  await page.getByRole('textbox', { name: 'Clip start' }).fill('2');
+  await page.keyboard.press('Enter');
+  await page.getByRole('textbox', { name: 'Clip duration' }).fill('00:00:01:15');
+  await page.keyboard.press('Enter');
+  const c = (await state(page)).clips[0];
+  expect(c.start).toBeCloseTo(2, 6);
+  expect(c.duration).toBeCloseTo(1.5, 6);
+  await page.keyboard.press('ControlOrMeta+z');
+  expect((await state(page)).clips[0].duration).toBeCloseTo(10, 6);
+});
+
+test('pressing L again fast-forwards (2×) and K stops', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4']); // 10 s
+  await waitForMediaReady(page);
+  await seek(page, 0);
+  await page.locator('.tl-scroll').focus();
+  await page.keyboard.press('l');
+  await page.waitForFunction(() => (window as any).__cutline.playback.getState().playing);
+  await page.keyboard.press('l');
+  await expect(page.getByRole('status', { name: 'Playing at 2 times speed' })).toBeVisible();
+  const t0 = await page.evaluate(() => (window as any).__cutline.playback.getState().time);
+  await page.waitForTimeout(1000);
+  const t1 = await page.evaluate(() => (window as any).__cutline.playback.getState().time);
+  expect(t1 - t0).toBeGreaterThan(1.6);
+  await page.keyboard.press('k');
+  const s = await page.evaluate(() => (window as any).__cutline.playback.getState());
+  expect([s.playing, s.rate]).toEqual([false, 1]);
 });

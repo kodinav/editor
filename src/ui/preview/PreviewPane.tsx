@@ -285,12 +285,24 @@ function Transport({ compact }: { compact?: boolean }) {
         </button>
       </div>
       <div className="transport-right">
+        <ShuttleRate />
         <button className={`icon-btn small${loop ? ' active' : ''}`} aria-pressed={loop} aria-label="Loop playback" data-tip="Loop" onClick={() => set('loop', !loop)}>
           <Repeat size={15} />
         </button>
         {!compact && <Meter />}
       </div>
     </div>
+  );
+}
+
+/** Fast-forward speed while shuttling (L pressed repeatedly). */
+function ShuttleRate() {
+  const rate = usePlayback((s) => (s.playing ? s.rate : 1));
+  if (rate === 1) return null;
+  return (
+    <span className="badge" role="status" aria-label={`Playing at ${rate} times speed`}>
+      {rate}×
+    </span>
   );
 }
 

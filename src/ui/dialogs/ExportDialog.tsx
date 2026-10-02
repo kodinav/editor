@@ -339,6 +339,10 @@ export default function ExportDialog() {
           )}
         </div>
       )}
+      {/* Spoken status for screen readers: the dialog's visual state changes silently otherwise. */}
+      <div className="sr-only" role="status" aria-live="polite">
+        {phase === 'done' ? `Export complete. ${result?.savedToDisk ? 'Saved to your chosen location.' : 'Your download has started.'}` : phase === 'error' ? `The export didn’t finish. ${error ?? ''}` : phase === 'running' ? 'Export started.' : ''}
+      </div>
       {phase === 'error' && (
         <div className="col" style={{ gap: 10 }}>
           <div className="row">

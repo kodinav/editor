@@ -395,3 +395,18 @@ describe('removing time across tracks', () => {
     expect(next.markers[0].t).toBeCloseTo(7.5, 6);
   });
 });
+
+import { audibleSegments } from '../../src/core/audio';
+import { createAudioClip } from '../../src/core/project';
+
+describe('solo', () => {
+  it('when a track is soloed, only soloed tracks are heard', () => {
+    const { p, v1, a1 } = setup();
+    addVideo(p, v1, 0, 5);
+    const music = createAudioClip(p.assets.A, { trackId: a1, start: 0, duration: 5 });
+    p.clips[music.id] = music;
+    expect(audibleSegments(p, 0, 5)).toHaveLength(2);
+    p.tracks.find((t) => t.id === a1)!.solo = true;
+    expect(audibleSegments(p, 0, 5).map((s) => s.clip.id)).toEqual([music.id]);
+  });
+});

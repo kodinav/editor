@@ -532,3 +532,10 @@ test('every offered export resolution produces a valid file (480p of a 16:9 proj
   expect(decodesCleanly(file)).toBe(true);
   expect(near(regionColor(file, 1, 0.05, 0.05), [250, 25, 0])).toBe(true);
 });
+
+test('HDR footage imports with an honest notice about standard-range output', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['hdr_hlg.mp4']);
+  await waitForMediaReady(page);
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().toasts.some((t: any) => /HDR video/.test(t.message)));
+});

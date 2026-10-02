@@ -37,13 +37,14 @@ function crossfades(p: Project, c: AudibleClip): { xfIn: number; xfOut: number }
 
 export function audibleSegments(p: Project, from: number, to: number): AudioSegment[] {
   const tracks = new Map(p.tracks.map((t) => [t.id, t]));
+  const soloing = p.tracks.some((t) => t.solo);
   const out: AudioSegment[] = [];
   for (const c of Object.values(p.clips)) {
     if (c.type !== 'video' && c.type !== 'audio') continue;
     if (c.disabled || c.muted) continue;
     if (c.type === 'video' && c.freeze) continue;
     const track = tracks.get(c.trackId);
-    if (!track || track.muted) continue;
+    if (!track || track.muted || (soloing && !track.solo)) continue;
     // Hidden video tracks are also silent: hiding a track takes it out of the mix entirely.
     if (track.kind === 'video' && track.hidden) continue;
     const asset = p.assets[c.assetId];

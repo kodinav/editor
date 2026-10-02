@@ -19,11 +19,25 @@ interface MenuState {
 }
 
 let seq = 0;
+/** Where focus goes back to when a menu closes (the button that opened it, or what had focus). */
+let returnFocus: HTMLElement | null = null;
 export const useMenuStore = create<MenuState>()((set) => ({
   open: null,
-  show: (x, y, items, anchor, alignRight) => set({ open: { x, y, items, anchor, id: ++seq, alignRight } }),
+  show: (x, y, items, anchor, alignRight) => {
+    returnFocus = anchor ?? (document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null);
+    set({ open: { x, y, items, anchor, id: ++seq, alignRight } });
+  },
   close: () => set({ open: null }),
 }));
+
+/** After a menu action: unless the action moved focus somewhere on purpose (a dialog, a field), go back. */
+function restoreFocus() {
+  const el = returnFocus;
+  returnFocus = null;
+  setTimeout(() => {
+    if (el?.isConnected && (document.activeElement === document.body || document.activeElement === null)) el.focus({ preventScroll: true });
+  });
+}
 
 export function openContextMenu(e: { clientX: number; clientY: number; preventDefault(): void }, items: MenuItem[]) {
   e.preventDefault();
@@ -127,9 +141,12 @@ export function MenuLayer() {
             aria-checked={item.checked}
             className={`menu-item${item.danger ? ' danger' : ''}`}
             disabled={item.disabled}
-            onClick={() => {
+            onClick={(e) => {
               close();
               item.onClick();
+              // Keyboard users continue where they were; mouse users don't need focus anywhere.
+              if (e.detail === 0) restoreFocus();
+              else returnFocus = null;
             }}
           >
             <span style={{ width: 16, display: 'inline-flex', justifyContent: 'center', flexShrink: 0 }}>

@@ -135,7 +135,12 @@ export async function probeAV(file: Blob, hint: 'video' | 'audio'): Promise<Prob
         );
       }
       video = info;
+      if (await vTrack.hasHighDynamicRange().catch(() => false)) {
+        warnings.push('This is HDR video. Cutline edits and exports in standard dynamic range, so very bright highlights and colours will look more muted than on an HDR display.');
+      }
     }
+    const audioTracks = await input.getAudioTracks().catch(() => []);
+    if (audioTracks.length > 1) warnings.push(`This file has ${audioTracks.length} audio tracks; only the first one is used.`);
     if (aTrack) {
       const info = await probeAudioTrack(aTrack);
       const decodable = await aTrack.canDecode().catch(() => false);

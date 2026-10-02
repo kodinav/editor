@@ -357,6 +357,7 @@ export function sanitizeTrack(raw: Loose): Track {
     hidden: bool(raw.hidden, false),
     muted: bool(raw.muted, false),
     locked: bool(raw.locked, false),
+    ...(raw.solo === true ? { solo: true } : {}),
     volume: num(raw.volume, 1, 0, 16),
     height: num(raw.height, kind === 'audio' ? 56 : kind === 'caption' ? 40 : 64, 24, 400),
   };

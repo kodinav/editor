@@ -362,12 +362,17 @@ export async function relinkAsset(assetId: string, file: File): Promise<void> {
     toast({ kind: 'error', message: `“${file.name}” is not a ${asset.kind} file.` });
     return;
   }
+  // The new file's own details replace the old ones (a different encode may differ in size,
+  // frame rate or audio format), and its audio is prepared again.
+  let details: Partial<Asset> = {};
   try {
     if (asset.kind === 'video' || asset.kind === 'audio') {
       const info = await probeAV(file, asset.kind);
+      if (info.kind !== asset.kind) throw new Error(`“${file.name}” has no ${asset.kind === 'video' ? 'video' : 'audio'} track.`);
       if (Math.abs(info.duration - asset.duration) > 0.5) {
         toast({ kind: 'warning', message: 'The new file has a different duration.', detail: 'Clips were kept as they are; check their timing.' });
       }
+      details = { duration: info.duration, video: info.video, audio: info.audio ? { ...info.audio, conformed: false } : undefined };
     } else if (asset.kind === 'image') {
       const { file: normalized, bitmap, converted } = await normalizeImageFile(file, MAX_IMAGE_DIM);
       media.setImage(assetId, bitmap);
@@ -378,7 +383,7 @@ export async function relinkAsset(assetId: string, file: File): Promise<void> {
     return;
   }
   media.setFile(assetId, file);
-  updateAsset(assetId, { status: 'ready', error: undefined, stored: false, name: asset.name, mimeType: file.type || asset.mimeType, size: file.size, lastModified: file.lastModified });
+  updateAsset(assetId, { ...details, status: 'ready', error: undefined, stored: false, name: asset.name, mimeType: file.type || asset.mimeType, size: file.size, lastModified: file.lastModified });
   void startBackgroundWork(editor().project.assets[assetId], file);
   toast({ kind: 'success', message: `Relinked “${asset.name}”.` });
 }

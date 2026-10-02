@@ -22,6 +22,7 @@ import {
   ShapeSection,
   SpeedSection,
   TextSection,
+  TimingSection,
   TransformSection,
 } from './sections';
 import { clipEditor } from './parts';
@@ -189,6 +190,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
         </div>
       )}
       <div className="insp-scroll" role="tabpanel">
+        {active === tabs[0].id && <TimingSection clip={clip} />}
         {active === 'edit' && clip.type === 'text' && <TextSection clip={clip} />}
         {active === 'edit' && clip.type === 'shape' && <ShapeSection clip={clip} />}
         {active === 'edit' && isVisualClip(clip) && (

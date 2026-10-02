@@ -28,6 +28,8 @@ const IDLE_MS = 8000;
 export class PreviewSources implements FrameSources {
   private entries = new Map<string, Entry>();
   onFrameReady: (() => void) | null = null;
+  /** A clip's media failed to open or decode (reported once per failure). */
+  onError: ((clipId: string, assetId: string, error: unknown) => void) | null = null;
 
   video = (clipId: string): VideoSample | null => this.entries.get(clipId)?.reader?.current ?? null;
 
@@ -56,6 +58,7 @@ export class PreviewSources implements FrameSources {
         .catch((err) => {
           entry.error = err;
           console.warn('Could not open video for preview', err);
+          this.onError?.(clipId, assetId, err);
         })
         .finally(() => (entry.opening = null));
       this.entries.set(clipId, entry);
@@ -75,6 +78,11 @@ export class PreviewSources implements FrameSources {
     for (const w of wanted) {
       const e = this.entry(w.key, w.assetId);
       if (!e || e.error) continue;
+      if (e.reader?.lastError) {
+        const err = e.reader.lastError;
+        e.reader.lastError = null;
+        this.onError?.(w.key, w.assetId, err);
+      }
       if (mode === 'play') {
         if (e.reader) e.reader.request(w.time);
         else if (e.opening) e.opening.then(() => e.reader?.request(w.time)).then(() => this.onFrameReady?.());
@@ -82,7 +90,11 @@ export class PreviewSources implements FrameSources {
         waits.push(
           (async () => {
             if (e.opening) await e.opening;
-            if (e.reader) await e.reader.seek(w.time).catch((err) => console.warn('seek failed', err));
+            if (e.reader)
+              await e.reader.seek(w.time).catch((err) => {
+                console.warn('seek failed', err);
+                this.onError?.(w.key, w.assetId, err);
+              });
           })(),
         );
       }

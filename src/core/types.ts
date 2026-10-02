@@ -88,6 +88,8 @@ export interface Track {
   name: string;
   hidden: boolean;
   muted: boolean;
+  /** When any track is soloed, only soloed tracks are heard. */
+  solo?: boolean;
   locked: boolean;
   /** Linear gain multiplier applied to every clip on the track. */
   volume: number;

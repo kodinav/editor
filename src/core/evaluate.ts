@@ -400,6 +400,22 @@ export function evaluateFrame(p: Project, t: number, opts: EvaluateOptions = {})
 }
 
 /** All video sources needed for a frame (used to prefetch decoders). */
+/** Image assets a frame draws (including both sides of transitions). */
+export function imageAssetsIn(desc: FrameDesc): string[] {
+  const out = new Set<string>();
+  const visit = (l: ClipLayer) => {
+    if (l.source.kind === 'image') out.add(l.source.assetId);
+  };
+  for (const l of desc.layers) {
+    if (l.type === 'clip') visit(l);
+    else if (l.type === 'transition') {
+      visit(l.a);
+      visit(l.b);
+    }
+  }
+  return [...out];
+}
+
 export function videoSourcesIn(desc: FrameDesc): { assetId: string; time: number; key: string }[] {
   const out: { assetId: string; time: number; key: string }[] = [];
   const visit = (l: ClipLayer) => {

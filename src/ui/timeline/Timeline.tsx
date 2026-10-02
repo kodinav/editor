@@ -5,6 +5,7 @@ import {
   Eye,
   EyeOff,
   Film,
+  Headphones,
   Lock,
   Magnet,
   MousePointer2,
@@ -151,16 +152,18 @@ export function Timeline({ compact }: { compact?: boolean }) {
     return () => el.removeEventListener('wheel', onWheel);
   }, [ctx, headerW]);
 
-  // Keep the playhead visible during playback (page-turn scrolling).
+  // Keep the playhead visible: page-turn scrolling during playback, and jumps (keyboard
+  // stepping, edit points, typed timecode) bring it into view too.
   useEffect(
     () =>
       usePlayback.subscribe((s, prev) => {
-        if (!s.playing || s.time === prev.time) return;
+        if (s.time === prev.time) return;
         const el = scrollerRef.current;
         if (!el) return;
         const x = s.time * editor().pxPerSec;
         const vw = el.clientWidth - headerW;
-        if (x > el.scrollLeft + vw - 40 || x < el.scrollLeft) el.scrollLeft = Math.max(0, x - 40);
+        if (x <= el.scrollLeft + vw - 40 && x >= el.scrollLeft) return;
+        el.scrollLeft = Math.max(0, s.playing ? x - 40 : x - vw / 3);
       }),
     [headerW],
   );
@@ -666,7 +669,7 @@ function TrackHeader({ track, width, compact }: { track: Track; width: number; c
   const [renaming, setRenaming] = useState(false);
   const [name, setName] = useState(track.name);
   const selectedTrackId = useEditor((s) => s.selectedTrackId);
-  const toggle = (key: 'hidden' | 'muted' | 'locked', label: string) =>
+  const toggle = (key: 'hidden' | 'muted' | 'locked' | 'solo', label: string) =>
     editor().commit(label, (d) => {
       const t = d.tracks.find((x) => x.id === track.id);
       if (t) t[key] = !t[key];
@@ -757,6 +760,11 @@ function TrackHeader({ track, width, compact }: { track: Track; width: number; c
         {track.kind !== 'caption' && (
           <button className={`icon-btn tiny${track.muted ? ' warn' : ''}`} aria-pressed={track.muted} aria-label={track.muted ? `Unmute ${track.name}` : `Mute ${track.name}`} data-tip={track.muted ? 'Unmute track' : 'Mute track'} onClick={() => toggle('muted', track.muted ? 'Unmute track' : 'Mute track')}>
             {track.muted ? <VolumeX size={15} /> : <Volume2 size={15} />}
+          </button>
+        )}
+        {track.kind !== 'caption' && (
+          <button className="icon-btn tiny" aria-pressed={!!track.solo} aria-label={track.solo ? `Unsolo ${track.name}` : `Solo ${track.name}`} data-tip={track.solo ? 'Stop soloing' : 'Solo: hear only soloed tracks'} onClick={() => toggle('solo', track.solo ? 'Unsolo track' : 'Solo track')}>
+            <Headphones size={14} />
           </button>
         )}
         <button className={`icon-btn tiny${track.locked ? ' warn' : ''}`} aria-pressed={track.locked} aria-label={track.locked ? `Unlock ${track.name}` : `Lock ${track.name}`} data-tip={track.locked ? 'Unlock track' : 'Lock track'} onClick={() => toggle('locked', track.locked ? 'Unlock track' : 'Lock track')}>

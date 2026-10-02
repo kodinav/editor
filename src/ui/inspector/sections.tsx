@@ -19,10 +19,10 @@ import {
   Unlink,
 } from 'lucide-react';
 import { COLOR_PARAMS, createEffect, EFFECT_MAP, EFFECTS, FILTER_PRESETS, NEUTRAL_COLOR, type EffectParamDef } from '@/core/effects';
-import { setSpeed } from '@/core/ops';
+import { moveClips, setSpeed, trimEnd } from '@/core/ops';
 import type { AnimationPreset, AudibleClip, BlendMode, CaptionStyle, Clip, FitMode, ShapeClip, TextClip, TextStyle, VisualClip, AdjustmentClip } from '@/core/types';
 import { BUNDLED_FONTS, resolveWeight, SYSTEM_FONTS } from '@/engine/fonts';
-import { formatShort } from '@/core/time';
+import { formatShort, formatTimecode, parseTime } from '@/core/time';
 import * as A from '@/state/actions';
 import { DEFAULT_SILENCE, type SilenceOptions } from '@/core/silence';
 import { findSilences, removeSilencesFromClip } from '@/state/silenceTools';
@@ -879,3 +879,58 @@ export function OpacitySection({ clip }: { clip: AdjustmentClip }) {
   );
 }
 
+
+/* ------------------------------- Timing ------------------------------ */
+
+/** A time typed as timecode (HH:MM:SS:FF) or seconds ("12.5", "1:20"). */
+function TimecodeField({ label, value, onCommit, fps }: { label: string; value: number; onCommit: (t: number) => void; fps: number }) {
+  const shown = formatTimecode(value, fps);
+  const [text, setText] = useState<string | null>(null);
+  const commitText = () => {
+    if (text === null) return;
+    const t = parseTime(text, fps);
+    setText(null);
+    if (t !== null && Math.abs(t - value) > 1e-6) onCommit(t);
+  };
+  return (
+    <input
+      className="input mono"
+      aria-label={label}
+      value={text ?? shown}
+      onFocus={(e) => {
+        setText(shown);
+        e.currentTarget.select();
+      }}
+      onChange={(e) => setText(e.target.value)}
+      onBlur={commitText}
+      onKeyDown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+        if (e.key === 'Escape') {
+          setText(null);
+          (e.target as HTMLInputElement).blur();
+        }
+      }}
+    />
+  );
+}
+
+/** Exact start and length, typed (for precise edits and keyboard-only editing). */
+export function TimingSection({ clip }: { clip: Clip }) {
+  const fps = useEditor((s) => s.project.settings.fps);
+  return (
+    <Section title="Timing" id="timing">
+      <Row label="Start">
+        <TimecodeField
+          label="Clip start"
+          value={clip.start}
+          fps={fps}
+          onCommit={(t) => editor().commit('Move clip', (d) => moveClips(d, { clipIds: [clip.id], dt: Math.max(0, t) - clip.start, trackDelta: 0, mode: 'overwrite' }))}
+        />
+      </Row>
+      <Row label="Duration">
+        <TimecodeField label="Clip duration" value={clip.duration} fps={fps} onCommit={(t) => editor().commit('Trim clip', (d) => trimEnd(d, clip.id, clip.start + Math.max(0, t)))} />
+      </Row>
+    </Section>
+  );
+}

@@ -35,6 +35,9 @@ export class AudioEngine {
   private bufR = new Float32Array(BLOCK);
   private generation = 0;
   private lastScrub = 0;
+  /** Shuttle speed: the timeline runs this many times faster (audio pitched up, like tape). */
+  private rate = 1;
+  private wide: { l: Float32Array; r: Float32Array } | null = null;
   underruns = 0;
 
   constructor(private readonly getProject: () => Project) {
@@ -69,8 +72,9 @@ export class AudioEngine {
   }
 
   /** Begin playback from project time t. Resolves once the clock is running. */
-  async start(t: number): Promise<void> {
+  async start(t: number, rate = 1): Promise<void> {
     this.stop();
+    this.rate = rate;
     const ctx = this.ensure();
     const gen = ++this.generation;
     if (ctx.state !== 'running') await ctx.resume().catch(() => {});
@@ -111,7 +115,7 @@ export class AudioEngine {
     if (!this.ctx || !this.playing) return this.startT;
     const latency = (this.ctx.outputLatency || 0) + (this.ctx.baseLatency || 0);
     const heard = this.ctx.currentTime - latency - this.startCtx;
-    return this.startT + Math.max(0, heard);
+    return this.startT + Math.max(0, heard) * this.rate;
   }
 
   private async pump() {
@@ -125,13 +129,29 @@ export class AudioEngine {
           // We fell behind (tab was busy): skip ahead instead of drifting out of sync.
           const skip = ctx.currentTime + 0.02 - this.nextCtx;
           this.nextCtx += skip;
-          this.nextT += skip;
+          this.nextT += skip * this.rate;
           this.underruns++;
         }
         const p = this.getProject();
-        await this.mixer.prepare(p, this.nextT, BLOCK);
+        const r = this.rate;
+        await this.mixer.prepare(p, this.nextT, BLOCK * r);
         if (!this.playing || gen !== this.generation) return;
-        this.mixer.mix(p, this.nextT, BLOCK, this.bufL, this.bufR);
+        if (r === 1) this.mixer.mix(p, this.nextT, BLOCK, this.bufL, this.bufR);
+        else {
+          // Mix r blocks of timeline audio and keep every r-th (averaged) sample.
+          if (!this.wide || this.wide.l.length < BLOCK * r) this.wide = { l: new Float32Array(BLOCK * r), r: new Float32Array(BLOCK * r) };
+          this.mixer.mix(p, this.nextT, BLOCK * r, this.wide.l, this.wide.r);
+          for (let i = 0; i < BLOCK; i++) {
+            let l = 0;
+            let rr = 0;
+            for (let k = 0; k < r; k++) {
+              l += this.wide.l[i * r + k];
+              rr += this.wide.r[i * r + k];
+            }
+            this.bufL[i] = l / r;
+            this.bufR[i] = rr / r;
+          }
+        }
         const buf = ctx.createBuffer(2, BLOCK, SR);
         buf.copyToChannel(this.bufL, 0);
         buf.copyToChannel(this.bufR, 1);
@@ -147,7 +167,7 @@ export class AudioEngine {
         this.nodes.push(node);
         this.meters.push({ at: this.nextCtx, l: peak(this.bufL), r: peak(this.bufR) });
         if (this.meters.length > 64) this.meters.splice(0, this.meters.length - 64);
-        this.nextT += BLOCK / SR;
+        this.nextT += (BLOCK / SR) * this.rate;
         this.nextCtx += BLOCK / SR;
       }
     } catch (e) {
