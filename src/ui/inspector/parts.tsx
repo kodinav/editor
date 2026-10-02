@@ -32,7 +32,7 @@ export function clipEditor(clipId: string, label: string) {
         if (c) recipe(c, localT(c), d);
       };
       if (s.gestureBase) s.updateGesture(apply);
-      else s.commit(label, apply);
+      else s.commit(label, apply, { coalesce: `${label}:${clipId}` });
     },
     end: () => editor().endGesture(),
   };

@@ -113,7 +113,15 @@ export async function exportVia(page: Page, outPath: string, setup?: () => Promi
   if (setup) await setup();
   const dl = page.waitForEvent('download', { timeout: 170_000 });
   await page.getByRole('button', { name: /^Export (video|audio)/ }).click();
-  const d = await dl;
+  // Fail fast with the app's own message instead of waiting for a download that never comes.
+  const failed = page
+    .getByText('The export didn’t finish.')
+    .waitFor({ timeout: 170_000 })
+    .then(async () => {
+      throw new Error(`Export failed: ${await page.locator('.callout.err').innerText()}`);
+    });
+  const d = await Promise.race([dl, failed]);
+  failed.catch(() => {});
   await d.saveAs(outPath);
   return outPath;
 }

@@ -7,6 +7,8 @@ export interface RenderTarget {
   fbo: WebGLFramebuffer;
   w: number;
   h: number;
+  /** Frame (see TargetPool.tick) in which it was last released. */
+  used?: number;
 }
 
 export const VERT = /* glsl */ `#version 300 es
@@ -115,8 +117,14 @@ export function setSampling(gl: GL, min: number, mag: number) {
 export class TargetPool {
   private free = new Map<string, RenderTarget[]>();
   private all: RenderTarget[] = [];
+  private frame = 0;
 
   constructor(private readonly gl: GL) {}
+
+  /** Advance the pool's clock (once per rendered frame). */
+  tick() {
+    this.frame++;
+  }
 
   acquire(w: number, h: number): RenderTarget {
     w = Math.max(1, Math.round(w));
@@ -129,30 +137,52 @@ export class TargetPool {
     const fbo = gl.createFramebuffer()!;
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
     gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, tex, 0);
-    const rt = { tex, fbo, w, h };
+    const rt: RenderTarget = { tex, fbo, w, h };
     this.all.push(rt);
     return rt;
   }
 
   release(rt: RenderTarget | null | undefined) {
     if (!rt) return;
+    rt.used = this.frame;
     const key = `${rt.w}x${rt.h}`;
     let list = this.free.get(key);
     if (!list) this.free.set(key, (list = []));
     if (!list.includes(rt)) list.push(rt);
   }
 
-  /** Drop pooled targets that weren't used recently (call between frames when sizes change). */
-  trim(maxFree = 6) {
-    for (const [key, list] of this.free) {
-      while (list.length > maxFree) {
-        const rt = list.shift()!;
-        this.gl.deleteTexture(rt.tex);
-        this.gl.deleteFramebuffer(rt.fbo);
-        this.all = this.all.filter((x) => x !== rt);
+  /**
+   * Free pooled targets that sat unused for `maxAge` frames, and the oldest
+   * ones beyond `budget` bytes. Sizes change all the time (resizing the
+   * preview, animated scale or crop), so without this every size ever seen
+   * would keep its GPU memory.
+   */
+  trim(maxAge = 90, budget = 256 * 1024 * 1024) {
+    const free = [...this.free.values()].flat().sort((a, b) => (a.used ?? 0) - (b.used ?? 0));
+    const doomed = new Set<RenderTarget>();
+    let bytes = free.reduce((n, rt) => n + rt.w * rt.h * 4, 0);
+    for (const rt of free) {
+      if (this.frame - (rt.used ?? 0) > maxAge || bytes > budget) {
+        doomed.add(rt);
+        bytes -= rt.w * rt.h * 4;
       }
-      if (list.length === 0) this.free.delete(key);
     }
+    if (!doomed.size) return;
+    for (const rt of doomed) {
+      this.gl.deleteTexture(rt.tex);
+      this.gl.deleteFramebuffer(rt.fbo);
+    }
+    this.all = this.all.filter((rt) => !doomed.has(rt));
+    for (const [key, list] of this.free) {
+      const keep = list.filter((rt) => !doomed.has(rt));
+      if (keep.length) this.free.set(key, keep);
+      else this.free.delete(key);
+    }
+  }
+
+  /** Targets currently allocated and the bytes they hold (diagnostics and tests). */
+  stats(): { targets: number; bytes: number; free: number } {
+    return { targets: this.all.length, bytes: this.all.reduce((n, rt) => n + rt.w * rt.h * 4, 0), free: [...this.free.values()].reduce((n, l) => n + l.length, 0) };
   }
 
   dispose() {

@@ -390,10 +390,11 @@ export function applyFilterPreset(presetId: string, ids = editor().selection) {
       if (!c || !(isVisualClip(c) || c.type === 'adjustment')) continue;
       c.color = { ...NEUTRAL_COLOR, ...preset.color };
       // Replace effects previously added by a filter preset.
-      c.effects = c.effects.filter((e) => !e.params.__filter);
+      c.effects = c.effects.filter((e) => !e.look);
       for (const e of preset.effects ?? []) {
         const fx = createEffect(e.type);
-        fx.params = { ...fx.params, ...(e.params ?? {}), __filter: true };
+        fx.params = { ...fx.params, ...(e.params ?? {}) };
+        fx.look = true;
         c.effects.push(fx);
       }
     }
@@ -437,6 +438,7 @@ export function setClipSpeedPreset(speed: number) {
   });
 }
 
+/** D: select the clip under the playhead; pressing again moves down through stacked clips. */
 export function selectClipAtPlayhead() {
   const t = now();
   const p = editor().project;
@@ -444,7 +446,45 @@ export function selectClipAtPlayhead() {
   const under = Object.values(p.clips)
     .filter((c) => isActiveAt(c, t))
     .sort((a, b) => order.indexOf(a.trackId) - order.indexOf(b.trackId));
-  if (under.length) editor().select([under[0].id]);
+  if (!under.length) return;
+  const sel = editor().selection;
+  const i = sel.length === 1 ? under.findIndex((c) => c.id === sel[0]) : -1;
+  editor().select([under[(i + 1) % under.length].id]);
+}
+
+const byStart = (a: Clip, b: Clip) => a.start - b.start;
+
+/** [ / ]: the previous / next clip on the selected clip's track (from the playhead if nothing is selected). */
+export function selectSiblingClip(dir: 1 | -1) {
+  const p = editor().project;
+  const cur = p.clips[editor().selection[0] ?? ''];
+  const trackId = cur?.trackId ?? p.tracks.find((tr) => Object.values(p.clips).some((c) => c.trackId === tr.id))?.id;
+  if (!trackId) return;
+  const list = Object.values(p.clips)
+    .filter((c) => c.trackId === trackId)
+    .sort(byStart);
+  let next: Clip | undefined;
+  if (cur) next = list[list.indexOf(cur) + dir];
+  else {
+    const t = now();
+    next = dir > 0 ? list.find((c) => clipEnd(c) > t) : [...list].reverse().find((c) => c.start < t);
+  }
+  if (next) editor().select([next.id]);
+}
+
+/** Alt+Up / Alt+Down: the clip on the nearest track above / below that is closest in time. */
+export function selectClipOnAdjacentTrack(dir: 1 | -1) {
+  const p = editor().project;
+  const cur = p.clips[editor().selection[0] ?? ''];
+  const t = cur ? cur.start + cur.duration / 2 : now();
+  let i = cur ? p.tracks.findIndex((tr) => tr.id === cur.trackId) : dir > 0 ? -1 : p.tracks.length;
+  for (i += dir; i >= 0 && i < p.tracks.length; i += dir) {
+    const list = Object.values(p.clips).filter((c) => c.trackId === p.tracks[i].id);
+    if (!list.length) continue;
+    const dist = (c: Clip) => (t >= c.start && t < clipEnd(c) ? 0 : Math.min(Math.abs(c.start - t), Math.abs(clipEnd(c) - t)));
+    editor().select([list.reduce((a, b) => (dist(b) < dist(a) ? b : a)).id]);
+    return;
+  }
 }
 
 export function jumpToEdit(dir: 1 | -1) {

@@ -35,6 +35,9 @@
   overscroll-behavior: contain;
   outline: none;
 }
+.tl-scroll:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
 .tl-inner {
   position: relative;
 }

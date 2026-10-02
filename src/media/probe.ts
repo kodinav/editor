@@ -161,10 +161,36 @@ export async function probeAV(file: Blob, hint: 'video' | 'audio'): Promise<Prob
   }
 }
 
+/**
+ * What an image file really contains, judged by its first bytes rather than
+ * its name or MIME type (files get renamed; SVGs are stored as PNG).
+ */
+export async function sniffImage(file: Blob): Promise<'raster' | 'svg' | 'unknown'> {
+  const b = new Uint8Array(await file.slice(0, 1024).arrayBuffer());
+  const at = (i: number, ...xs: number[]) => xs.every((x, k) => b[i + k] === x);
+  const ascii = (i: number, s: string) => [...s].every((ch, k) => b[i + k] === ch.charCodeAt(0));
+  if (
+    at(0, 0x89, 0x50, 0x4e, 0x47) || // PNG
+    at(0, 0xff, 0xd8, 0xff) || // JPEG
+    ascii(0, 'GIF8') ||
+    (ascii(0, 'RIFF') && ascii(8, 'WEBP')) ||
+    ascii(4, 'ftyp') || // AVIF / HEIF
+    ascii(0, 'BM') ||
+    at(0, 0x49, 0x49, 0x2a, 0x00) || // TIFF (little-endian)
+    at(0, 0x4d, 0x4d, 0x00, 0x2a) || // TIFF (big-endian)
+    at(0, 0x00, 0x00, 0x01, 0x00) // ICO
+  ) {
+    return 'raster';
+  }
+  const text = new TextDecoder().decode(b).toLowerCase();
+  return text.includes('<svg') ? 'svg' : 'unknown';
+}
+
 /** Decode an image; returns a bitmap (caller closes) and its size. */
 export async function decodeImage(file: Blob, maxDim = 8192): Promise<ImageBitmap> {
-  const isSvg = file.type === 'image/svg+xml' || (file instanceof File && extOf(file.name) === 'svg');
-  if (isSvg) return rasterizeSvg(file, 2048);
+  const kind = await sniffImage(file);
+  const named = file.type === 'image/svg+xml' || (file instanceof File && extOf(file.name) === 'svg');
+  if (kind === 'svg' || (kind === 'unknown' && named)) return rasterizeSvg(file, 2048);
   let bmp: ImageBitmap;
   try {
     bmp = await createImageBitmap(file, { imageOrientation: 'from-image', premultiplyAlpha: 'premultiply' });
@@ -186,9 +212,9 @@ export async function decodeImage(file: Blob, maxDim = 8192): Promise<ImageBitma
   return bmp;
 }
 
-/** SVGs are rasterized once at import (main thread only: needs an <img>). */
+/** SVGs are rasterized once at import or relink (main thread only: needs an <img>). */
 async function rasterizeSvg(file: Blob, maxDim: number): Promise<ImageBitmap> {
-  if (typeof document === 'undefined') throw new ProbeError('SVG must be rasterized on the main thread.');
+  if (typeof document === 'undefined') throw new ProbeError('This SVG was not converted when it was imported. Relink or re-import it.');
   const url = URL.createObjectURL(file);
   try {
     const img = new Image();
@@ -212,6 +238,19 @@ async function rasterizeSvg(file: Blob, maxDim: number): Promise<ImageBitmap> {
 }
 
 /** Encode a bitmap to PNG (used to store rasterized SVGs). */
+/**
+ * Image files as the project stores them: SVGs become PNGs (decoded once, on
+ * the main thread), so workers and the export never meet SVG markup.
+ */
+export async function normalizeImageFile(file: File, maxDim: number): Promise<{ file: File; bitmap: ImageBitmap; converted: boolean }> {
+  const bitmap = await decodeImage(file, maxDim);
+  const kind = await sniffImage(file);
+  if (kind === 'raster' || (kind === 'unknown' && extOf(file.name) !== 'svg')) return { file, bitmap, converted: false };
+  const png = await bitmapToPng(bitmap);
+  const name = file.name.replace(/\.svg$/i, '') + '.png';
+  return { file: new File([png], name, { type: 'image/png', lastModified: file.lastModified }), bitmap, converted: true };
+}
+
 export async function bitmapToPng(bmp: ImageBitmap): Promise<Blob> {
   const c = new OffscreenCanvas(bmp.width, bmp.height);
   c.getContext('2d')!.drawImage(bmp, 0, 0);

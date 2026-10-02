@@ -1,10 +1,10 @@
-import { Unzip, UnzipInflate, UnzipPassThrough, Zip, ZipPassThrough, strToU8, strFromU8 } from 'fflate';
 import { uid } from '@/core/ids';
 import { parseProject, ProjectValidationError } from '@/core/schema';
 import type { Project } from '@/core/types';
 import { media } from '@/media/registry';
 import { saveProject } from '@/storage/db';
 import { DIRS, getFileHandle } from '@/storage/opfs';
+import { readZip, ZipError, ZipWriter } from '@/storage/zip';
 import { openProject, projectMeta } from './projectManager';
 import { editor, toast } from './store';
 import { downloadBlob } from '@/ui/download';
@@ -23,7 +23,7 @@ export async function exportProjectPackage(includeMedia: boolean): Promise<void>
   const missing: string[] = [];
 
   let writable: FileSystemWritableFileStream | null = null;
-  const parts: Uint8Array[] = [];
+  const parts: (Blob | Uint8Array<ArrayBuffer>)[] = [];
   const picker = (window as unknown as { showSaveFilePicker?: (o: unknown) => Promise<FileSystemFileHandle> }).showSaveFilePicker;
   if (picker && includeMedia) {
     try {
@@ -34,52 +34,22 @@ export async function exportProjectPackage(includeMedia: boolean): Promise<void>
     }
   }
 
-  let pending: Promise<void> = Promise.resolve();
-  let failed: unknown = null;
-  const done = new Promise<void>((resolve, reject) => {
-    const zip = new Zip((err, chunk, final) => {
-      if (err) {
-        failed = err;
-        reject(err);
-        return;
-      }
-      if (writable) {
-        const w = writable;
-        pending = pending.then(() => w.write(chunk as Uint8Array<ArrayBuffer>));
-      } else parts.push(chunk);
-      if (final) pending.then(resolve, reject);
-    });
-    (async () => {
-      const manifest = new ZipPassThrough(MANIFEST);
-      zip.add(manifest);
-      const doc = { format: 'cutline-project', version: 1, includesMedia: includeMedia, project: p };
-      manifest.push(strToU8(JSON.stringify(doc)), true);
-      if (includeMedia) {
-        for (const a of Object.values(p.assets)) {
-          const f = media.getFile(a.id);
-          if (!f) {
-            missing.push(a.name);
-            continue;
-          }
-          const entry = new ZipPassThrough(`media/${a.id}`);
-          zip.add(entry);
-          const reader = f.stream().getReader();
-          for (;;) {
-            if (failed) return;
-            const { done: d, value } = await reader.read();
-            if (d) break;
-            entry.push(value);
-            await pending;
-          }
-          entry.push(new Uint8Array(0), true);
-        }
-      }
-      zip.end();
-    })().catch(reject);
-  });
-
   try {
-    await done;
+    // Without a file handle the parts are Blobs (media files are referenced, not copied).
+    const zip = new ZipWriter(async (part) => {
+      if (writable) await writable.write(part);
+      else parts.push(part);
+    });
+    const doc = { format: 'cutline-project', version: 1, includesMedia: includeMedia, project: p };
+    await zip.add(MANIFEST, new TextEncoder().encode(JSON.stringify(doc)));
+    if (includeMedia) {
+      for (const a of Object.values(p.assets)) {
+        const f = media.getFile(a.id);
+        if (!f) missing.push(a.name);
+        else await zip.add(`media/${a.id}`, f);
+      }
+    }
+    await zip.finish();
     if (writable) await writable.close();
     else downloadBlob(new Blob(parts as BlobPart[], { type: 'application/zip' }), fileName);
     toast({
@@ -92,80 +62,35 @@ export async function exportProjectPackage(includeMedia: boolean): Promise<void>
   }
 }
 
-
 /** Import a .cutline package as a new project (never overwrites an existing one). */
 export async function importProjectPackage(file: File): Promise<void> {
-  let manifestText = '';
-  const writers = new Map<string, Promise<FileSystemWritableFileStream | null>>();
-  const writes: Promise<unknown>[] = [];
   const idMap = new Map<string, string>();
-
   try {
-    await new Promise<void>((resolve, reject) => {
-      const unzip = new Unzip((entry) => {
-        // Packages re-zipped by hand may be compressed and wrapped in one folder (plus macOS metadata).
-        if (entry.name.startsWith('__MACOSX/')) return;
-        const name = entry.name.replace(/^[^/]+\/(?=(?:project\.json|media\/[^/]+)$)/, '');
-        if (name === MANIFEST) {
-          const chunks: Uint8Array[] = [];
-          entry.ondata = (err, data, final) => {
-            if (err) return reject(err);
-            chunks.push(data);
-            if (final) {
-              const total = chunks.reduce((n, c) => n + c.length, 0);
-              const all = new Uint8Array(total);
-              let o = 0;
-              for (const c of chunks) {
-                all.set(c, o);
-                o += c.length;
-              }
-              manifestText = strFromU8(all);
-            }
-          };
-          entry.start();
-          return;
-        }
-        const m = /^media\/([\w-]{1,64})$/.exec(name);
-        if (!m) return; // ignore unexpected entries
-        const oldId = m[1];
-        const newId = uid('ast');
-        idMap.set(oldId, newId);
-        const w = getFileHandle(DIRS.media, newId, true).then((h) => (h ? h.createWritable() : null));
-        writers.set(oldId, w);
-        let chain: Promise<unknown> = w;
-        entry.ondata = (err, data, final) => {
-          if (err) return reject(err);
-          chain = chain.then(async () => {
-            const ws = await w;
-            if (!ws) return;
-            if (data.length) await ws.write(data as Uint8Array<ArrayBuffer>);
-            if (final) await ws.close();
-          });
-          if (final) writes.push(chain);
-        };
-        entry.start();
-      });
-      unzip.register(UnzipPassThrough);
-      unzip.register(UnzipInflate);
-      const reader = file.stream().getReader();
-      (async () => {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) {
-            unzip.push(new Uint8Array(0), true);
-            break;
-          }
-          unzip.push(value);
-        }
-        await Promise.all(writes);
-        resolve();
-      })().catch(reject);
-    });
-
-    if (!manifestText) throw new ProjectValidationError('This file does not contain a Cutline project.');
-    const doc = JSON.parse(manifestText) as { format?: string; project?: unknown };
+    const entries = await readZip(file);
+    // Packages re-zipped by hand may be wrapped in one folder (plus macOS metadata).
+    const named = entries
+      .filter((e) => !e.name.startsWith('__MACOSX/'))
+      .map((e) => ({ e, name: e.name.replace(/^[^/]+\/(?=(?:project\.json|media\/[^/]+)$)/, '') }));
+    const manifest = named.find((x) => x.name === MANIFEST);
+    if (!manifest) throw new ProjectValidationError('This file does not contain a Cutline project.');
+    const doc = JSON.parse(await manifest.e.text()) as { format?: string; project?: unknown };
     if (doc.format !== 'cutline-project' || !doc.project) throw new ProjectValidationError('This file is not a Cutline project.');
     const parsed = parseProject(doc.project);
+    for (const { e, name } of named) {
+      const m = /^media\/([\w-]{1,64})$/.exec(name);
+      if (!m || !parsed.assets[m[1]]) continue; // ignore unexpected entries
+      const newId = uid('ast');
+      const handle = await getFileHandle(DIRS.media, newId, true);
+      if (!handle) throw new Error('Local storage is not available, so media can’t be unpacked.');
+      const w = await handle.createWritable();
+      try {
+        await e.stream().pipeTo(w);
+      } catch (err) {
+        await w.abort().catch(() => {});
+        throw err;
+      }
+      idMap.set(m[1], newId);
+    }
     const project = remapIds(parsed, idMap);
     await saveProject(project, projectMeta(project));
     await openProject(project);
@@ -183,13 +108,7 @@ export async function importProjectPackage(file: File): Promise<void> {
       toast({ kind: 'success', message: `Opened “${project.name}”.` });
     }
   } catch (e) {
-    const raw = String((e as Error).message ?? e);
-    const msg =
-      e instanceof ProjectValidationError || e instanceof SyntaxError
-        ? e.message
-        : /compression type|invalid zip|unexpected EOF/i.test(raw)
-          ? 'The file is damaged or uses a compression method Cutline can’t read. Save the project from Cutline again.'
-          : raw;
+    const msg = e instanceof ProjectValidationError || e instanceof SyntaxError || e instanceof ZipError ? e.message : String((e as Error).message ?? e);
     toast({ kind: 'error', message: 'Could not open the project file.', detail: msg });
   }
 }

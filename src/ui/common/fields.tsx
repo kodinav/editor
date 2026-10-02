@@ -165,6 +165,9 @@ export function Slider({
       style={{ ['--fill' as string]: `${Math.max(0, Math.min(100, fill))}%` }}
       onPointerDown={() => onBegin?.()}
       onPointerUp={() => onEnd?.()}
+      onPointerCancel={() => onEnd?.()}
+      onLostPointerCapture={() => onEnd?.()}
+      onBlur={() => onEnd?.()}
       onKeyDown={(e) => {
         if (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End' || e.key.startsWith('Page')) onBegin?.();
         e.stopPropagation();
@@ -227,7 +230,8 @@ export function SliderRow({
   );
 }
 
-export function ColorField({ value, onChange, ariaLabel, allowNone, onBegin, onEnd }: { value: string | null; onChange: (v: string | null) => void; ariaLabel: string; allowNone?: boolean } & ContinuousProps) {
+/** Colour picker + hex input. Picker drags arrive as a stream of changes; callers coalesce them into one undo step. */
+export function ColorField({ value, onChange, ariaLabel, allowNone }: { value: string | null; onChange: (v: string | null) => void; ariaLabel: string; allowNone?: boolean } & ContinuousProps) {
   const hex = value && /^#[0-9a-f]{6}/i.test(value) ? value.slice(0, 7) : '#000000';
   const [text, setText] = useState(value ?? '');
   useEffect(() => setText(value ?? ''), [value]);
@@ -237,8 +241,6 @@ export function ColorField({ value, onChange, ariaLabel, allowNone, onBegin, onE
         type="color"
         aria-label={ariaLabel}
         value={hex}
-        onFocus={() => onBegin?.()}
-        onBlur={() => onEnd?.()}
         onChange={(e) => onChange(e.target.value)}
       />
       <input

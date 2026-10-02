@@ -47,8 +47,11 @@ function unicodeRange(pkg, subset) {
 let imports = '';
 let entries = '';
 let n = 0;
-for (const [family, [pkg, weights]] of Object.entries(FAMILIES)) {
+for (const [family, [pkg, listed]] of Object.entries(FAMILIES)) {
   const faces = [];
+  // Every bundled weight also gets its italic where the family has one, so Italic never
+  // falls back to another weight. Families without italics are slanted by the browser.
+  const weights = [...new Set(listed.flatMap((w) => (w.endsWith('i') ? [w] : [w, `${w}i`])))];
   for (const w of weights) {
     const italic = w.endsWith('i');
     const weight = parseInt(w, 10);

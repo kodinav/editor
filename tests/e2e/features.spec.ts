@@ -157,8 +157,21 @@ test('a project open in two tabs is protected from conflicting saves', async ({ 
   const second = await context.newPage();
   await second.goto('/?debug');
   await expect(second.getByText(/open in another tab/)).toBeVisible();
+  // The first tab keeps working and saves a marker before the second takes over.
+  await page.evaluate(() => (window as any).__cutline.editor.getState().commit('Marker', (d: any) => d.markers.push({ id: 'm1', t: 1, label: 'From tab 1', color: '#fff' })));
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
   await second.getByRole('button', { name: 'Edit here instead' }).click();
   await expect(second.getByText(/open in another tab/)).toHaveCount(0);
+  // The second tab continues from the latest saved version, not its stale copy…
+  await second.waitForFunction(() => (window as any).__cutline.editor.getState().project.markers.some((m: any) => m.label === 'From tab 1'));
+  // …and the first tab now knows it lost the project and stops saving.
+  await expect(page.getByText(/now being edited in another tab/)).toBeVisible();
+  await second.evaluate(() => (window as any).__cutline.editor.getState().commit('Marker', (d: any) => d.markers.push({ id: 'm2', t: 2, label: 'From tab 2', color: '#fff' })));
+  await second.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
+  // When the second tab closes, the first takes over again with tab 2's work.
+  await second.close();
+  await expect(page.getByText(/now being edited in another tab/)).toHaveCount(0);
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().project.markers.some((m: any) => m.label === 'From tab 2'));
 });
 
 test('offline media can be relinked', async ({ page }) => {
@@ -384,4 +397,156 @@ test('starter templates render their titles and save cleanly', async ({ page }) 
     await page.keyboard.press('ControlOrMeta+z'); // back to the empty project for the next template
     await expect.poll(async () => (await state(page)).clips.length).toBe(0);
   }
+});
+
+test('typing is saved as you go, even without leaving the field', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t'); // add a title (selected)
+  const box = page.locator('#text-content-input');
+  await box.click();
+  await box.fill('Hello from a reload');
+  // No blur: the text must still reach storage, and the indicator must not claim "Saved" early.
+  await page.waitForFunction(() => {
+    const s = (window as any).__cutline.editor.getState();
+    return s.saveState === 'saved' && (Object.values(s.project.clips) as any[]).some((c) => c.text === 'Hello from a reload');
+  });
+  await page.reload();
+  await page.waitForFunction(() => (Object.values((window as any).__cutline?.editor.getState().project.clips ?? {}) as any[]).some((c) => c.text === 'Hello from a reload'));
+});
+
+test('a canvas drag interrupted by Escape still lands, and undo keeps working', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t');
+  const id = (await state(page)).clips[0].id;
+  const box = (await page.locator('polygon.gizmo-box').first().boundingBox())!;
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  await page.mouse.move(cx + 40, cy, { steps: 4 });
+  await page.keyboard.press('Escape'); // deselects: the handle that started the drag unmounts
+  await page.mouse.move(cx + 80, cy, { steps: 4 });
+  await page.mouse.up();
+  const moved = await page.evaluate((cid) => {
+    const s = (window as any).__cutline.editor.getState();
+    return { open: !!s.gestureBase, x: s.project.clips[cid].transform.x, undo: s.past.length };
+  }, id);
+  expect(moved.open).toBe(false);
+  expect(moved.x).toBeGreaterThan(0);
+  await page.keyboard.press('ControlOrMeta+z');
+  expect(await page.evaluate((cid) => (window as any).__cutline.editor.getState().project.clips[cid].transform.x, id)).toBe(0);
+});
+
+test('projects can be duplicated and deleted from the Projects dialog', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t');
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
+  page.on('dialog', (d) => d.accept());
+  const cards = () => page.getByRole('dialog').getByRole('button', { name: /^More options for / });
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  await page.getByRole('menuitem', { name: 'All projects…' }).click();
+  await expect(cards()).toHaveCount(1);
+  await cards().first().click();
+  await page.getByRole('menuitem', { name: 'Duplicate' }).click();
+  await expect(cards()).toHaveCount(2);
+  await cards().nth(1).click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  await expect(cards()).toHaveCount(1);
+});
+
+test('italic works for every font and keeps the chosen weight', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t');
+  const id = (await state(page)).clips[0].id;
+  // Render the title with a style and return its white-pixel mask from the preview.
+  const render = (style: Record<string, unknown>) =>
+    page.evaluate(
+      async ({ id, style }) => {
+        const { editor, player } = (window as any).__cutline;
+        editor.getState().commit('Style', (d: any) => Object.assign(d.clips[id].style, { text: undefined, ...style }));
+        for (let i = 0; i < 2; i++) {
+          await new Promise((r) => setTimeout(r, 400)); // font loads, then redraws
+          player.requestRender();
+        }
+        await new Promise((r) => setTimeout(r, 200));
+        const bmp = await createImageBitmap(await player.snapshot());
+        const c = new OffscreenCanvas(bmp.width, bmp.height);
+        const ctx = c.getContext('2d')!;
+        ctx.drawImage(bmp, 0, 0);
+        const px = ctx.getImageData(0, 0, c.width, c.height).data;
+        const mask: number[] = [];
+        for (let i = 0; i < px.length; i += 4) mask.push(px[i] > 200 && px[i + 1] > 200 && px[i + 2] > 200 ? 1 : 0);
+        return mask;
+      },
+      { id, style },
+    );
+  const count = (m: number[]) => m.reduce((a, b) => a + b, 0);
+  const diff = (a: number[], b: number[]) => a.reduce((n, v, i) => n + (v !== b[i] ? 1 : 0), 0);
+  const anton = await render({ fontFamily: 'Anton', fontWeight: 400, italic: false });
+  const antonItalic = await render({ fontFamily: 'Anton', fontWeight: 400, italic: true });
+  expect(count(anton)).toBeGreaterThan(500);
+  expect(diff(anton, antonItalic)).toBeGreaterThan(count(anton) * 0.2); // visibly slanted
+  const light = await render({ fontFamily: 'Roboto', fontWeight: 400, italic: true });
+  const black = await render({ fontFamily: 'Roboto', fontWeight: 900, italic: true });
+  expect(count(black)).toBeGreaterThan(count(light) * 1.3); // bold stays bold in italic
+});
+
+test('imported fonts belong to their project: used by titles, gone in other projects', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['BrandFont.woff2']);
+  await waitForMediaReady(page);
+  await page.keyboard.press('t');
+  const id = (await state(page)).clips.find((c) => c.type === 'text').id;
+  await page.evaluate((cid) => (window as any).__cutline.editor.getState().commit('Font', (d: any) => (d.clips[cid].style.fontFamily = 'BrandFont')), id);
+  const faces = () => page.evaluate(() => [...(document as any).fonts].filter((f: any) => f.family.replace(/"/g, '') === 'BrandFont' && f.status === 'loaded').length);
+  await expect.poll(faces).toBe(1);
+  await expect(page.getByRole('button', { name: 'More options for BrandFont.woff2' })).toBeVisible();
+  await page.getByRole('button', { name: 'More options for BrandFont.woff2' }).click();
+  await expect(page.getByRole('menuitem', { name: /Remove \(used 1×\)/ })).toBeVisible(); // counted as used by the title
+  await page.keyboard.press('Escape');
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
+  const first = (await page.evaluate(() => (window as any).__cutline.editor.getState().project.id)) as string;
+  // A new project doesn't see it (so its preview can't use a font its export wouldn't have).
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  await page.getByRole('menuitem', { name: 'New project…' }).click();
+  await page.getByRole('button', { name: 'Create project' }).click();
+  await page.waitForFunction((pid) => (window as any).__cutline.editor.getState().project.id !== pid, first);
+  await expect.poll(faces).toBe(0);
+  // Back in the first project it is available again.
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  await page.getByRole('menuitem', { name: 'All projects…' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^More options for / }).last().click();
+  await page.getByRole('menuitem', { name: 'Open' }).click();
+  await page.waitForFunction((pid) => (window as any).__cutline.editor.getState().project.id === pid, first);
+  await expect.poll(faces).toBe(1);
+});
+
+test('every clip can be selected from the keyboard, including stacked ones', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4', 'music.mp3']);
+  await waitForMediaReady(page);
+  await seek(page, 1);
+  await page.keyboard.press('t'); // a title over the video, music underneath
+  await page.keyboard.press('Escape');
+  await page.locator('.tl-scroll').focus();
+  const selected = async () => {
+    const s = await state(page);
+    return s.clips.find((c) => c.id === s.selection[0])?.type;
+  };
+  await page.keyboard.press('d');
+  expect(await selected()).toBe('text');
+  await page.keyboard.press('d');
+  expect(await selected()).toBe('video');
+  await page.keyboard.press('d');
+  expect(await selected()).toBe('audio');
+  await page.keyboard.press('Alt+ArrowUp');
+  expect(await selected()).toBe('video');
+  await page.keyboard.press('Alt+ArrowUp');
+  expect(await selected()).toBe('text');
+  await page.keyboard.press('Alt+ArrowDown');
+  await page.keyboard.press('Alt+ArrowDown');
+  expect(await selected()).toBe('audio');
+  // …and then edited: the music, which sits under the footage, is deleted from the keyboard.
+  await page.keyboard.press('Delete');
+  expect((await state(page)).clips.map((c) => c.type).sort()).toEqual(['text', 'video']);
 });

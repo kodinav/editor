@@ -73,7 +73,12 @@ export interface EditorState {
 
   /* actions */
   loadProject(p: Project): void;
-  commit(label: string, recipe: (draft: Project) => void): void;
+  /**
+   * Apply an undoable edit. With `coalesce`, consecutive edits that share the
+   * key (typing, picking a colour, arrow-key nudges) merge into one undo step
+   * while they keep coming.
+   */
+  commit(label: string, recipe: (draft: Project) => void, opts?: { coalesce?: string }): void;
   /** Mutate without creating an undo entry (asset status, autosave metadata, ...). */
   silent(recipe: (draft: Project) => void): void;
   beginGesture(label: string): void;
@@ -90,14 +95,22 @@ export interface EditorState {
 
 let toastSeq = 1;
 
-/** Undo/redo swap clips/tracks/settings but never lose asset metadata (imports aren't undoable). */
-function restoreKeepingAssets(snapshot: Project, current: Project): Project {
+/** Edits with the same coalesce key this close together share an undo step. */
+const COALESCE_MS = 1500;
+let coalescing: { key: string; at: number } | null = null;
+
+/**
+ * Undo/redo: the snapshot decides which assets exist (so removing media is
+ * undoable and redoable), while the current metadata wins for the ones it has
+ * (analysis results and storage state are never rolled back). Imports reach
+ * every snapshot through silent(), so undo never removes them.
+ */
+function restoreAssets(snapshot: Project, current: Project): Project {
   return produce(snapshot, (d) => {
-    const merged: Record<string, Asset> = { ...current.assets };
-    for (const c of Object.values(d.clips)) {
-      if ('assetId' in c && !merged[c.assetId] && snapshot.assets[c.assetId]) merged[c.assetId] = snapshot.assets[c.assetId];
+    for (const id of Object.keys(d.assets)) {
+      const now = current.assets[id];
+      if (now && now !== snapshot.assets[id]) d.assets[id] = now as Asset;
     }
-    d.assets = merged as typeof d.assets;
     d.name = current.name;
   });
 }
@@ -135,6 +148,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   readOnlyReason: null,
 
   loadProject(p) {
+    coalescing = null;
     set({
       project: p,
       past: [],
@@ -149,22 +163,34 @@ export const useEditor = create<EditorState>()((set, get) => ({
     });
   },
 
-  commit(label, recipe) {
+  commit(label, recipe, opts = {}) {
     const { project, past, gestureBase } = get();
+    const apply = (base: Project) =>
+      produce(base, (d) => {
+        recipe(d);
+        normalize(d);
+        d.updatedAt = Date.now();
+      });
     if (gestureBase) {
-      // Edits during a gesture fold into it.
-      get().updateGesture(recipe);
+      // Something else changed the project mid-gesture (a finished background job, a
+      // shortcut): keep it in both the gesture's base and the current state, as its own
+      // undo step before the gesture's.
+      const base = apply(gestureBase);
+      const next = apply(project);
+      if (base === gestureBase && next === project) return;
+      coalescing = null;
+      set({ project: next, gestureBase: base, past: [...past.slice(-HISTORY_LIMIT + 1), { project: gestureBase, label }], future: [], saveState: 'unsaved' });
+      pruneSelection();
       return;
     }
-    const next = produce(project, (d) => {
-      recipe(d);
-      normalize(d);
-      d.updatedAt = Date.now();
-    });
+    const next = apply(project);
     if (next === project) return;
+    const now = Date.now();
+    const merge = !!opts.coalesce && coalescing?.key === opts.coalesce && now - coalescing.at < COALESCE_MS && past.length > 0;
+    coalescing = opts.coalesce ? { key: opts.coalesce, at: now } : null;
     set({
       project: next,
-      past: [...past.slice(-HISTORY_LIMIT + 1), { project, label }],
+      past: merge ? past : [...past.slice(-HISTORY_LIMIT + 1), { project, label }],
       future: [],
       lastLabel: label,
       saveState: 'unsaved',
@@ -176,8 +202,16 @@ export const useEditor = create<EditorState>()((set, get) => ({
     const { project, past, future, gestureBase } = get();
     const next = produce(project, recipe);
     if (next === project) return;
-    // Keep asset changes visible across history too.
-    const patch = (p: Project) => produce(p, (d) => void (d.assets = next.assets as typeof d.assets));
+    // New assets (imports) join every snapshot and metadata updates reach the snapshots that
+    // have the asset; nothing is deleted from history here.
+    const before = project.assets;
+    const changed = Object.keys(next.assets).filter((id) => next.assets[id] !== before[id]);
+    const patch = (p: Project) =>
+      changed.length === 0
+        ? p
+        : produce(p, (d) => {
+            for (const id of changed) if (!before[id] || d.assets[id]) d.assets[id] = next.assets[id] as Asset;
+          });
     set({
       project: next,
       gestureBase: gestureBase ? patch(gestureBase) : null,
@@ -188,7 +222,11 @@ export const useEditor = create<EditorState>()((set, get) => ({
   },
 
   beginGesture(label) {
-    if (get().gestureBase) return;
+    const { gestureBase, gestureLabel } = get();
+    if (gestureBase && gestureLabel === label) return; // re-entrant (key repeat)
+    // A gesture left open by a lost pointer must not swallow the next one.
+    if (gestureBase) get().endGesture();
+    coalescing = null;
     set({ gestureBase: get().project, gestureLabel: label });
   },
 
@@ -200,7 +238,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
       normalize(d);
       d.updatedAt = Date.now();
     });
-    set({ project: next });
+    set({ project: next, saveState: 'unsaved' });
   },
 
   endGesture() {
@@ -227,11 +265,13 @@ export const useEditor = create<EditorState>()((set, get) => ({
   },
 
   undo() {
-    const { past, future, project, gestureBase } = get();
-    if (gestureBase || past.length === 0) return;
+    if (get().gestureBase) get().endGesture();
+    coalescing = null;
+    const { past, future, project } = get();
+    if (past.length === 0) return;
     const entry = past[past.length - 1];
     set({
-      project: restoreKeepingAssets(entry.project, project),
+      project: restoreAssets(entry.project, project),
       past: past.slice(0, -1),
       future: [{ project, label: entry.label }, ...future],
       lastLabel: entry.label,
@@ -241,11 +281,13 @@ export const useEditor = create<EditorState>()((set, get) => ({
   },
 
   redo() {
-    const { past, future, project, gestureBase } = get();
-    if (gestureBase || future.length === 0) return;
+    if (get().gestureBase) get().endGesture();
+    coalescing = null;
+    const { past, future, project } = get();
+    if (future.length === 0) return;
     const entry = future[0];
     set({
-      project: restoreKeepingAssets(entry.project, project),
+      project: restoreAssets(entry.project, project),
       past: [...past, { project, label: entry.label }],
       future: future.slice(1),
       lastLabel: entry.label,

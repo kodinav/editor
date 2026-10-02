@@ -21,7 +21,7 @@ import {
 import { COLOR_PARAMS, createEffect, EFFECT_MAP, EFFECTS, FILTER_PRESETS, NEUTRAL_COLOR, type EffectParamDef } from '@/core/effects';
 import { setSpeed } from '@/core/ops';
 import type { AnimationPreset, AudibleClip, BlendMode, CaptionStyle, Clip, FitMode, ShapeClip, TextClip, TextStyle, VisualClip, AdjustmentClip } from '@/core/types';
-import { BUNDLED_FONTS, customFontFamilies, resolveWeight, SYSTEM_FONTS } from '@/engine/fonts';
+import { BUNDLED_FONTS, resolveWeight, SYSTEM_FONTS } from '@/engine/fonts';
 import { formatShort } from '@/core/time';
 import * as A from '@/state/actions';
 import { DEFAULT_SILENCE, type SilenceOptions } from '@/core/silence';
@@ -493,7 +493,7 @@ export function fontOptions(): { label: string; families: string[] }[] {
     { label: 'Monospace', families: groups.mono },
     { label: 'System', families: SYSTEM_FONTS },
   ];
-  const custom = customFontFamilies();
+  const custom = [...new Set(Object.values(editor().project.assets).flatMap((a) => (a.kind === 'font' && a.font ? [a.font.family] : [])))];
   if (custom.length) out.unshift({ label: 'Your fonts', families: custom });
   return out;
 }
@@ -604,21 +604,21 @@ export function TextSection({ clip }: { clip: TextClip }) {
         onFocus={() => setDraft(clip.text)}
         onChange={(e) => {
           setDraft(e.target.value);
-          // Live preview while typing; folded into one undo step on blur.
+          // Every keystroke is saved; a burst of typing is one undo step.
           const v = e.target.value;
-          if (!editor().gestureBase) editor().beginGesture('Edit text');
-          editor().updateGesture((d) => {
-            const c = d.clips[clip.id];
-            if (c?.type === 'text') {
-              c.text = v;
-              c.name = v.split('\n')[0].slice(0, 40) || 'Text';
-            }
-          });
+          editor().commit(
+            'Edit text',
+            (d) => {
+              const c = d.clips[clip.id];
+              if (c?.type === 'text') {
+                c.text = v;
+                c.name = v.split('\n')[0].slice(0, 40) || 'Text';
+              }
+            },
+            { coalesce: `text:${clip.id}` },
+          );
         }}
-        onBlur={() => {
-          setDraft(null);
-          editor().endGesture();
-        }}
+        onBlur={() => setDraft(null)}
         onKeyDown={(e) => e.stopPropagation()}
       />
       <TextStyleEditor style={clip.style} onBegin={ed.begin} onEnd={ed.end} onChange={(patch) => ed.change((c) => c.type === 'text' && Object.assign(c.style, patch))} />
@@ -636,7 +636,7 @@ export function CaptionStyleSection({ trackId, style }: { trackId: string; style
       if (t?.captionStyle) Object.assign(t.captionStyle, patch);
     };
     if (editor().gestureBase) editor().updateGesture(apply);
-    else editor().commit(label, apply);
+    else editor().commit(label, apply, { coalesce: `caption-style:${trackId}` });
   };
   return (
     <Section title="Caption style" id="caption-style">

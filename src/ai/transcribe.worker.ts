@@ -95,7 +95,6 @@ async function load(model: ModelSize) {
     });
     asr = p as unknown as Asr;
     loaded = model;
-    post({ type: 'ready', device: 'wasm' });
   })();
   try {
     await loading;
@@ -140,7 +139,9 @@ self.onmessage = async (e: MessageEvent<WorkerIn>) => {
   const m = e.data;
   try {
     if (m.type === 'load') {
+      // Answer every load request, including when the model is already loaded (a second run).
       await load(m.model);
+      post({ type: 'ready', device: 'wasm' });
     } else if (m.type === 'detect') {
       const r = await detectLanguage(m.audio);
       post({ type: 'language', id: m.id, code: r.code, confidence: r.confidence });

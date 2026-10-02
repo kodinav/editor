@@ -83,7 +83,11 @@ class ExportSources implements FrameSources {
           continue;
         }
       }
-      this.images.set(a.id, await decodeImage(this.files[a.id]));
+      try {
+        this.images.set(a.id, await decodeImage(this.files[a.id]));
+      } catch (e) {
+        throw new Error(`The image “${a.name}” could not be prepared for export: ${(e as Error).message ?? e}`);
+      }
     }
   }
 
@@ -424,7 +428,7 @@ async function run(msg: ExportStartMessage) {
         // Keep audio ~1s ahead so the muxer can interleave without buffering everything.
         await writeAudioUntil(tRel + 1);
         const desc = await sources.prepare(p, t);
-        compositor.render(desc, sources, scale);
+        compositor.render(desc, sources, scale, { w: o.width, h: o.height });
         if (compositor.gl.isContextLost()) throw new Error('The graphics device was reset during export. Please try again.');
         await videoSource.add(tRel, 1 / o.fps);
         const now = performance.now();
@@ -437,7 +441,7 @@ async function run(msg: ExportStartMessage) {
     }
     // Audio-only exports (and any audio tail) are written here.
     const audioChunk = 10;
-    for (let tRel = 0; audioWritten < totalAudioFrames; tRel += audioChunk) {
+    for (let tRel = 0; audioSource && audioWritten < totalAudioFrames; tRel += audioChunk) {
       await writeAudioUntil(tRel + audioChunk);
       if (audioOnly) {
         const elapsed = (performance.now() - t0) / 1000;

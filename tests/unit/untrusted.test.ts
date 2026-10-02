@@ -177,3 +177,16 @@ describe('untrusted project files', () => {
     });
   }
 });
+
+describe('looks', () => {
+  it('effects added by a look stay marked after reopening (so the next look replaces them)', () => {
+    const p = richProject();
+    const vid = Object.values(p.clips).find((c) => c.type === 'video') as { effects: { look?: boolean; params: Record<string, unknown> }[] };
+    vid.effects[0].look = true;
+    vid.effects[1].params.__filter = true; // how older projects marked it
+    const back = parseProject(JSON.parse(JSON.stringify(p)));
+    const fx = (Object.values(back.clips).find((c) => c.type === 'video') as unknown as { effects: { look?: boolean; params: Record<string, unknown> }[] }).effects;
+    expect(fx.map((e) => e.look === true)).toEqual([true, true]);
+    expect(fx[1].params.__filter).toBeUndefined();
+  });
+});

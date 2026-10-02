@@ -26,7 +26,7 @@ test('auto captions transcribe speech on-device with word timing', async ({ page
   await waitForMediaReady(page);
   await page.getByRole('tab', { name: 'Captions' }).click();
   await page.getByRole('button', { name: /Generate automatically/ }).click();
-  await page.getByRole('button', { name: /Generate captions/ }).click();
+  await page.getByRole('button', { name: 'Generate captions', exact: true }).click();
   await expect.poll(async () => (await state(page)).clips.filter((c) => c.type === 'caption').length, { timeout: 540_000 }).toBeGreaterThan(2);
   const caps = (await state(page)).clips.filter((c) => c.type === 'caption');
   const text = caps.map((c) => c.text).join(' ').toLowerCase();
@@ -39,6 +39,12 @@ test('auto captions transcribe speech on-device with word timing', async ({ page
       expect(w.end).toBeLessThanOrEqual(c.duration + 0.05);
     }
   }
+  // A second run reuses the loaded model (this used to wait forever).
+  const tab = page.getByRole('tab', { name: 'Captions' });
+  if ((await tab.getAttribute('aria-selected')) !== 'true') await tab.click(); // clicking the open tab collapses it
+  await page.getByRole('button', { name: 'Generate captions automatically' }).click();
+  await page.getByRole('button', { name: 'Generate captions', exact: true }).click();
+  await expect.poll(async () => (await state(page)).tracks.filter((t) => t.name === 'Auto captions').length, { timeout: 120_000 }).toBe(2);
   // The highlighted (active) word is burned into the export in yellow.
   const file = await exportVia(page, out('autocaptions.mp4'));
   const first = caps[0];

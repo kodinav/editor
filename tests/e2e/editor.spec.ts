@@ -202,7 +202,7 @@ test('captions import, burn in, and export as SRT', async ({ page }) => {
   expect(near(regionColor(file, 1, 0.45, 0.1, 0.1, 0.05), [0, 15, 255])).toBe(true);
 });
 
-test('project file round-trips with media', async ({ page }) => {
+test('project file without media reopens with the media offline', async ({ page }) => {
   await openEditor(page);
   await importFiles(page, ['red.mp4']);
   await waitForMediaReady(page);
@@ -373,4 +373,162 @@ test('a damaged project file opens with what can be recovered, and says so', asy
   // The recovered project renders (page errors fail the test).
   await seek(page, 1.5);
   await page.waitForTimeout(300);
+});
+
+test('exporting without audio produces a silent video file', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['red.mp4']);
+  await waitForMediaReady(page);
+  const file = await exportVia(page, out('no-audio.mp4'), async () => {
+    await page.getByRole('dialog').getByRole('checkbox', { name: 'Include audio' }).uncheck();
+  });
+  const info = probe(file);
+  expect(info.video).toMatchObject({ codec: 'h264', width: 1280, height: 720 });
+  expect(info.audio).toBeUndefined();
+  expect(info.duration).toBeGreaterThan(2.9);
+  expect(near(regionColor(file, 1, 0.05, 0.05), [250, 25, 0])).toBe(true);
+});
+
+test('SVG graphics export, also after their local copy is saved and after a reload', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['blue.mp4', 'logo.svg']);
+  await waitForMediaReady(page);
+  // The bug appeared once the background copy into local storage finished.
+  await page.waitForFunction(() => (Object.values((window as any).__cutline.editor.getState().project.assets) as any[]).every((a) => a.stored));
+  const s = await state(page);
+  const logo = s.clips.find((c) => c.type === 'image');
+  expect(s.assets.find((a) => a.kind === 'image').mimeType).toBe('image/png');
+  const t = logo.start + 1;
+  const first = await exportVia(page, out('svg.mp4'));
+  expect(near(regionColor(first, t, 0.05, 0.45, 0.05, 0.05), [0, 200, 83])).toBe(true);
+  await page.getByRole('dialog').getByRole('button', { name: 'Done', exact: true }).click();
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
+  await page.reload();
+  await page.waitForFunction(() => Object.keys((window as any).__cutline?.editor.getState().project.clips ?? {}).length === 2);
+  await waitForMediaReady(page);
+  const second = await exportVia(page, out('svg-reloaded.mp4'));
+  expect(near(regionColor(second, t, 0.05, 0.45, 0.05, 0.05), [0, 200, 83])).toBe(true);
+});
+
+test('preview playback decodes continuously and keeps the picture on the audio clock', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4']);
+  await waitForMediaReady(page);
+  await seek(page, 0);
+  await page.evaluate(() => (window as any).__cutline.player.toggle());
+  await page.waitForFunction(() => (window as any).__cutline.playback.getState().playing);
+  const samples: { t: number; frame: number | null; restarts: number }[] = [];
+  for (let i = 0; i < 14; i++) {
+    await page.waitForTimeout(150);
+    samples.push(
+      await page.evaluate(() => {
+        const { player, playback, editor } = (window as any).__cutline;
+        const st = player.sources.stats();
+        const clipId = Object.keys(editor.getState().project.clips)[0];
+        return { t: playback.getState().time, frame: st.frames[clipId] ?? null, restarts: st.restarts };
+      }),
+    );
+  }
+  await page.evaluate(() => (window as any).__cutline.player.toggle());
+  expect(samples.at(-1)!.t).toBeGreaterThan(1.5); // it really played
+  // Only the opening seek restarts the decoder; playing on must not jump it around.
+  expect(samples.at(-1)!.restarts).toBeLessThanOrEqual(1);
+  for (const s of samples.slice(3)) {
+    expect(s.frame, `no picture at ${s.t}`).not.toBeNull();
+    expect(Math.abs(s.frame! - s.t), `picture at ${s.frame} while audio is at ${s.t}`).toBeLessThan(0.12);
+  }
+});
+
+test('removing media can be undone and redone, and the restored clips export and survive a reload', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['red.mp4', 'blue.mp4']);
+  await waitForMediaReady(page);
+  const names = async () => (await state(page)).assets.map((a) => a.name).sort();
+  page.on('dialog', (d) => d.accept()); // "used 1 time — remove it and its clips?"
+  await page.getByRole('button', { name: 'More options for red.mp4' }).click();
+  await page.getByRole('menuitem', { name: /Remove \(used 1×\)/ }).click();
+  expect(await names()).toEqual(['blue.mp4']);
+  expect((await state(page)).clips).toHaveLength(1);
+  await page.keyboard.press('ControlOrMeta+z');
+  expect(await names()).toEqual(['blue.mp4', 'red.mp4']);
+  expect((await state(page)).clips).toHaveLength(2);
+  await page.keyboard.press('ControlOrMeta+Shift+z');
+  expect(await names()).toEqual(['blue.mp4']);
+  await page.keyboard.press('ControlOrMeta+z');
+  expect(await names()).toEqual(['blue.mp4', 'red.mp4']);
+  // The restored clip is really back: picture and sound in the export…
+  const file = await exportVia(page, out('undo-remove.mp4'));
+  expect(near(regionColor(file, 1, 0.05, 0.05), [250, 25, 0])).toBe(true);
+  expect(meanVolume(file, 0.3, 2.4)).toBeGreaterThan(-30);
+  await page.getByRole('dialog').getByRole('button', { name: 'Done', exact: true }).click();
+  // …and in the saved project.
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
+  await page.reload();
+  await page.waitForFunction(() => Object.keys((window as any).__cutline?.editor.getState().project.clips ?? {}).length === 2);
+  expect(await names()).toEqual(['blue.mp4', 'red.mp4']);
+});
+
+test('playing through many clips frees the GPU memory of clips that are done', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4']); // 10 s
+  await waitForMediaReady(page);
+  for (let t = 1; t < 10; t++) {
+    await seek(page, t);
+    await page.keyboard.press('s');
+  }
+  expect((await state(page)).clips).toHaveLength(10);
+  await seek(page, 0);
+  await page.evaluate(() => (window as any).__cutline.player.toggle());
+  await page.waitForFunction(() => (window as any).__cutline.playback.getState().time > 6, null, { timeout: 20_000 });
+  await page.evaluate(() => (window as any).__cutline.player.toggle());
+  const stats = await page.evaluate(() => (window as any).__cutline.player.compositor.stats());
+  // Six clips have played; only the most recent ones may still hold a frame texture.
+  expect(stats.videoTextures).toBeLessThanOrEqual(3);
+  expect(stats.targetBytes).toBeLessThan(256 * 1024 * 1024);
+});
+
+test('a project package with media reopens with every file intact', async ({ page }) => {
+  await page.addInitScript(() => void delete (window as any).showSaveFilePicker); // use the download path
+  await openEditor(page);
+  await importFiles(page, ['red.mp4', 'talking.mp4']);
+  await waitForMediaReady(page);
+  await page.getByRole('button', { name: 'Project menu' }).click();
+  const dl = page.waitForEvent('download');
+  await page.getByRole('menuitem', { name: /Save project file \(with media\)/ }).click();
+  const p = out('with-media.cutline');
+  await (await dl).saveAs(p);
+  const sizes = (await state(page)).assets.map((a) => a.size).sort();
+  const [chooser] = await Promise.all([
+    page.waitForEvent('filechooser'),
+    (async () => {
+      await page.getByRole('button', { name: 'Project menu' }).click();
+      await page.getByRole('menuitem', { name: 'Open project file…' }).click();
+    })(),
+  ]);
+  await chooser.setFiles(p);
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().toasts.some((t: any) => /^Opened/.test(t.message)));
+  await waitForMediaReady(page);
+  const s = await state(page);
+  expect(s.assets.every((a) => a.status === 'ready' && a.stored)).toBe(true);
+  // Byte-exact media: the stored copies have the original sizes.
+  const stored = await page.evaluate(async (ids: string[]) => {
+    const dir = await (await navigator.storage.getDirectory()).getDirectoryHandle('media');
+    return Promise.all(ids.map(async (id) => (await (await dir.getFileHandle(id)).getFile()).size));
+  }, s.assets.map((a) => a.id));
+  expect(stored.sort()).toEqual(sizes);
+  const file = await exportVia(page, out('from-package.mp4'));
+  expect(near(regionColor(file, 1, 0.05, 0.05), [250, 25, 0])).toBe(true);
+});
+
+test('every offered export resolution produces a valid file (480p of a 16:9 project)', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['red.mp4']); // 1280×720
+  await waitForMediaReady(page);
+  const file = await exportVia(page, out('480p.mp4'), async () => {
+    await page.getByRole('dialog').getByLabel('Resolution').selectOption({ label: '480p — 852×480' });
+  });
+  const info = probe(file);
+  expect(info.video).toMatchObject({ codec: 'h264', width: 852, height: 480 });
+  expect(decodesCleanly(file)).toBe(true);
+  expect(near(regionColor(file, 1, 0.05, 0.05), [250, 25, 0])).toBe(true);
 });

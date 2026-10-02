@@ -4,6 +4,7 @@ import { createProject, projectDuration } from '@/core/project';
 import { migrateProject } from '@/core/schema';
 import type { Project, ProjectSettings } from '@/core/types';
 import { analysis } from '@/media/analysis';
+import { customFontFamilies, registerCustomFont, unregisterCustomFont } from '@/engine/fonts';
 import { media } from '@/media/registry';
 import { player } from '@/playback/player';
 import {
@@ -52,7 +53,8 @@ export function projectMeta(p: Project, thumbnail?: Blob): ProjectMeta {
 async function writeNow(): Promise<void> {
   const s = editor();
   if (s.readOnlyReason) return;
-  const p = s.gestureBase ?? s.project;
+  // Always the state on screen, including an edit that's still in progress.
+  const p = s.project;
   let thumb: Blob | undefined;
   if (Date.now() - lastThumbAt > 15000 && Object.keys(p.clips).length > 0) {
     lastThumbAt = Date.now();
@@ -64,7 +66,7 @@ async function writeNow(): Promise<void> {
     await saveProject(p, projectMeta(p, thumb));
     if (import.meta.env.DEV) assertReloadsUnchanged(p);
     await kvSet(LAST_PROJECT_KEY, p.id);
-    if (editor().project === p || editor().gestureBase === p) useEditor.setState({ saveState: 'saved' });
+    if (editor().project === p) useEditor.setState({ saveState: 'saved' });
     else useEditor.setState({ saveState: 'unsaved' });
   } catch (e) {
     console.error('Save failed', e);
@@ -117,8 +119,21 @@ export async function flushSave(): Promise<void> {
   await saving;
 }
 
+/** Keep the registered custom fonts equal to the open project's font assets (preview = export). */
+function syncFonts(p: Project) {
+  const want = new Map<string, string>();
+  for (const a of Object.values(p.assets)) if (a.kind === 'font' && a.font) want.set(a.font.family, a.id);
+  for (const f of customFontFamilies()) if (!want.has(f)) unregisterCustomFont(f);
+  const have = new Set(customFontFamilies());
+  for (const [family, id] of want) {
+    const file = have.has(family) ? null : media.getFile(id);
+    if (file) void file.arrayBuffer().then((buf) => registerCustomFont(family, buf)).catch(() => {});
+  }
+}
+
 function startAutosave() {
   useEditor.subscribe((s, prev) => {
+    if (s.project.assets !== prev.project.assets) syncFonts(s.project);
     if (s.project !== prev.project && s.project.id === prev.project.id) saveSoon();
   });
   document.addEventListener('visibilitychange', () => {
@@ -135,36 +150,81 @@ function startAutosave() {
   });
 }
 
-async function acquireLock(id: string): Promise<boolean> {
+/*
+ * Cross-tab editing lock (Web Locks). One tab edits a project; another tab
+ * opening it is read-only and waits in line. "Edit here instead" steals the
+ * lock; the tab that loses it goes read-only immediately, so the two never
+ * save over each other. Whoever takes over reloads the latest saved version.
+ */
+const READ_ONLY_OTHER_TAB = 'This project is open in another tab. Changes here will not be saved.';
+const READ_ONLY_TAKEN = 'This project is now being edited in another tab. Changes here will not be saved.';
+let lockGen = 0;
+let lockWait: AbortController | null = null;
+
+function lockName(id: string) {
+  return `cutline-project-${id}`;
+}
+
+/** Hold the lock for `id` (or steal it). Resolves true once held, false if another tab has it. */
+function holdLock(id: string, steal = false): Promise<boolean> {
   releaseLock?.();
   releaseLock = null;
-  if (!('locks' in navigator)) return true;
+  lockWait?.abort();
+  lockWait = null;
+  if (!('locks' in navigator)) return Promise.resolve(true);
+  const gen = ++lockGen;
   return new Promise<boolean>((resolve) => {
     navigator.locks
-      .request(`cutline-project-${id}`, { ifAvailable: true }, (lock) => {
+      .request(lockName(id), steal ? { steal: true } : { ifAvailable: true }, (lock) => {
         if (!lock) {
           resolve(false);
+          waitForLock(id, gen);
           return undefined;
         }
         resolve(true);
         return new Promise<void>((release) => (releaseLock = release));
       })
-      .catch(() => resolve(true));
+      .catch(() => {
+        // Another tab stole the lock we held.
+        resolve(false);
+        if (gen !== lockGen || editor().project.id !== id) return;
+        releaseLock = null;
+        if (saveTimer !== null) clearTimeout(saveTimer);
+        saveTimer = null;
+        useEditor.setState({ readOnlyReason: READ_ONLY_TAKEN });
+        waitForLock(id, gen);
+      });
   });
+}
+
+/** Queue for the lock; when the other tab lets go, continue here from the latest saved version. */
+function waitForLock(id: string, gen: number) {
+  lockWait?.abort();
+  const ac = new AbortController();
+  lockWait = ac;
+  navigator.locks
+    .request(lockName(id), { signal: ac.signal }, () => {
+      if (gen !== lockGen || editor().project.id !== id) return undefined;
+      const held = new Promise<void>((release) => (releaseLock = release));
+      void continueFromStorage(id);
+      return held;
+    })
+    .catch(() => {});
+}
+
+/** Reopen the latest saved version of `id` while keeping the lock this tab now holds. */
+async function continueFromStorage(id: string) {
+  const latest = await loadProject(id).catch(() => undefined);
+  if (editor().project.id !== id) return;
+  if (latest) await openProject(latest, { keepLock: true });
+  else useEditor.setState({ readOnlyReason: null });
 }
 
 /** Take over a project that is open in another tab. */
 export async function stealLock(): Promise<void> {
   const id = editor().project.id;
-  releaseLock?.();
-  await new Promise<void>((resolve) => {
-    navigator.locks.request(`cutline-project-${id}`, { steal: true }, () => {
-      resolve();
-      return new Promise<void>((release) => (releaseLock = release));
-    });
-  });
-  useEditor.setState({ readOnlyReason: null });
-  saveSoon();
+  await holdLock(id, true);
+  await continueFromStorage(id);
 }
 
 /** Re-run analysis for assets whose conformed audio/thumbnails are missing. */
@@ -196,7 +256,7 @@ function repairDerivedData(ids: string[]) {
   }
 }
 
-export async function openProject(p: Project): Promise<void> {
+export async function openProject(p: Project, opts: { keepLock?: boolean } = {}): Promise<void> {
   await flushSave();
   player.pause();
   media.reset();
@@ -210,8 +270,8 @@ export async function openProject(p: Project): Promise<void> {
   });
   editor().loadProject(fixed);
   usePlayback.getState().set({ time: 0, playing: false });
-  const locked = await acquireLock(fixed.id);
-  useEditor.setState({ readOnlyReason: locked ? null : 'This project is open in another tab. Changes here will not be saved.' });
+  const locked = opts.keepLock ? true : await holdLock(fixed.id);
+  useEditor.setState({ readOnlyReason: locked ? null : READ_ONLY_OTHER_TAB });
   await kvSet(LAST_PROJECT_KEY, fixed.id);
   if (missing.length > 0) {
     toast({

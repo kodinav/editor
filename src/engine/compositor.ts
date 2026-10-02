@@ -83,7 +83,7 @@ export class Compositor {
   private quad: WebGLVertexArrayObject;
   private pool: TargetPool;
   private programs = new Map<string, Program>();
-  private videoTex = new Map<string, { tex: WebGLTexture; sample: VideoSample | null; ts: number; w: number; h: number }>();
+  private videoTex = new Map<string, { tex: WebGLTexture; sample: VideoSample | null; ts: number; w: number; h: number; used: number }>();
   private imageTex = new Map<string, { tex: WebGLTexture; bmp: ImageBitmap; w: number; h: number; used: number }>();
   private rasters = new Map<string, CachedRaster>();
   private frameCounter = 0;
@@ -130,16 +130,18 @@ export class Compositor {
 
   /* ------------------------------------------------------------------ */
 
-  render(desc: FrameDesc, sources: FrameSources, scale: number): RenderResult {
+  /** `size` forces the output size (exports need exactly the encoder's even dimensions). */
+  render(desc: FrameDesc, sources: FrameSources, scale: number, size?: { w: number; h: number }): RenderResult {
     const gl = this.gl;
     this.frameCounter++;
+    this.pool.tick();
     this.W = desc.width;
     this.H = desc.height;
     this.scale = scale;
     this.time = desc.time;
     this.result = { bounds: new Map(), missing: false, fontsPending: false };
-    const rw = Math.max(1, Math.round(desc.width * scale));
-    const rh = Math.max(1, Math.round(desc.height * scale));
+    const rw = size?.w ?? Math.max(1, Math.round(desc.width * scale));
+    const rh = size?.h ?? Math.max(1, Math.round(desc.height * scale));
     if (this.canvas.width !== rw || this.canvas.height !== rh) {
       this.canvas.width = rw;
       this.canvas.height = rh;
@@ -175,6 +177,7 @@ export class Compositor {
     copy.i1('uTex', 0);
     gl.drawArrays(gl.TRIANGLES, 0, 6);
     this.pool.release(acc);
+    if (this.frameCounter % 30 === 0) this.pool.trim();
     if (this.frameCounter % 120 === 0) this.gcRasters();
     return this.result;
   }
@@ -195,9 +198,10 @@ export class Compositor {
       const tex = gl.createTexture()!;
       gl.bindTexture(gl.TEXTURE_2D, tex);
       setSampling(gl, gl.LINEAR, gl.LINEAR);
-      entry = { tex, sample: null, ts: -1, w: 0, h: 0 };
+      entry = { tex, sample: null, ts: -1, w: 0, h: 0, used: this.frameCounter };
       this.videoTex.set(clipId, entry);
     }
+    entry.used = this.frameCounter;
     if (entry.sample !== sample || entry.ts !== sample.timestamp) {
       gl.bindTexture(gl.TEXTURE_2D, entry.tex);
       try {
@@ -283,7 +287,19 @@ export class Compositor {
         this.imageTex.delete(k);
       }
     }
-    this.pool.trim();
+    // One full-size frame per clip adds up fast (split clips, long exports); free clips off screen.
+    for (const [k, e] of this.videoTex) {
+      if (this.frameCounter - e.used > 120) {
+        this.gl.deleteTexture(e.tex);
+        this.videoTex.delete(k);
+      }
+    }
+  }
+
+  /** GPU memory held by the compositor (diagnostics and tests). */
+  stats(): { targets: number; targetBytes: number; videoTextures: number; imageTextures: number; rasters: number } {
+    const pool = this.pool.stats();
+    return { targets: pool.targets, targetBytes: pool.bytes, videoTextures: this.videoTex.size, imageTextures: this.imageTex.size, rasters: this.rasters.size };
   }
 
   private textSource(text: string, style: TextStyle, layerScale: number, visibleChars: number | null, highlight: { start: number; end: number; color: string } | null): Source {

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { evaluateFrame } from '@/core/evaluate';
+import { evaluateFrame, videoSourcesIn } from '@/core/evaluate';
 import type { LayerGeometry } from '@/core/geometry';
 import { projectDuration } from '@/core/project';
 import { snapToFrame } from '@/core/time';
@@ -200,7 +200,9 @@ class Player {
     const now = performance.now();
     if (now - this.lastPrerollAt > 250) {
       this.lastPrerollAt = now;
-      this.sources.preroll(evaluateFrame(p, t + 0.8));
+      // Only clips that aren't on screen yet: seeking a playing clip's decoder ahead would
+      // make it jump forward and then restart from a keyframe.
+      this.sources.preroll(evaluateFrame(p, t + 0.8), new Set(videoSourcesIn(desc).map((w) => w.key)));
     }
     const scale = this.renderScale();
     const res = c.render(desc, this.sources, scale);

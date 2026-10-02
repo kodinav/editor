@@ -111,7 +111,9 @@ export function effects(v: unknown): Effect[] {
     let fxId = id(o.id, 'fx');
     if (seen.has(fxId)) fxId = uid('fx');
     seen.add(fxId);
-    out.push({ id: fxId, type: def.type, enabled: bool(o.enabled, true), params });
+    // `look` marks effects added by a one-click look (older projects kept it in params.__filter).
+    const look = o.look === true || given.__filter === true;
+    out.push({ id: fxId, type: def.type, enabled: bool(o.enabled, true), params, ...(look ? { look: true } : {}) });
   }
   return out;
 }

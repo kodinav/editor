@@ -28,11 +28,19 @@ export function MediaPanel() {
         .sort((a, b) => a.createdAt - b.createdAt),
     [assets, filter, query],
   );
+  const tracks = useEditor((s) => s.project.tracks);
   const usage = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of Object.values(clips)) if ('assetId' in c) m.set(c.assetId, (m.get(c.assetId) ?? 0) + 1);
+    // Fonts are "used" by every title and caption track styled with them.
+    const fontAsset = new Map(Object.values(assets).flatMap((a) => (a.kind === 'font' && a.font ? [[a.font.family, a.id] as const] : [])));
+    const families = [...Object.values(clips).flatMap((c) => (c.type === 'text' ? [c.style.fontFamily] : [])), ...tracks.flatMap((t) => (t.captionStyle ? [t.captionStyle.fontFamily] : []))];
+    for (const f of families) {
+      const id = fontAsset.get(f);
+      if (id) m.set(id, (m.get(id) ?? 0) + 1);
+    }
     return m;
-  }, [clips]);
+  }, [clips, assets, tracks]);
   const total = Object.keys(assets).length;
 
   return (
@@ -200,12 +208,17 @@ async function relink(asset: Asset) {
 }
 
 function removeAsset(asset: Asset, uses: number) {
-  if (uses > 0 && !window.confirm(`“${asset.name}” is used ${uses} time(s) in the timeline. Remove it and its clips?`)) return;
+  const question =
+    asset.kind === 'font'
+      ? `“${asset.name}” is used by ${uses} title or caption style(s). Remove it? They will switch to a default font.`
+      : `“${asset.name}” is used ${uses} time(s) in the timeline. Remove it and its clips?`;
+  if (uses > 0 && !window.confirm(question)) return;
+  // One undoable step: Undo brings back the media and its clips together.
   editor().commit('Remove media', (d) => {
     for (const c of Object.values(d.clips)) if ('assetId' in c && c.assetId === asset.id) delete d.clips[c.id];
+    delete d.assets[asset.id];
   });
-  editor().silent((d) => void delete d.assets[asset.id]);
-  toast({ kind: 'info', message: `Removed “${asset.name}”.` });
+  toast({ kind: 'info', message: `Removed “${asset.name}”.`, detail: 'Undo (Ctrl/⌘+Z) brings it back.' });
 }
 
 /** Small poster for an asset: video thumbnail, image, or audio waveform. */

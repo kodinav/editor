@@ -19,8 +19,9 @@ const loaded = new Map<string, Promise<void>>();
 const ready = new Set<string>();
 const listeners = new Set<() => void>();
 
-/** Custom (user-imported) fonts: family -> font bytes. */
+/** Custom (user-imported) fonts: family -> font bytes, and the faces added for them. */
 const customFonts = new Map<string, ArrayBuffer>();
+const customFaces = new Map<string, FontFace>();
 
 export function onFontLoaded(cb: () => void): () => void {
   listeners.add(cb);
@@ -31,15 +32,18 @@ function findFamily(family: string): FontFamilyEntry | undefined {
   return BUNDLED_FONTS.find((f) => f.family === family);
 }
 
-/** Closest available weight for a bundled family. */
+/**
+ * The face to load for a bundled family: the closest weight first (so italic
+ * never makes a bold title regular), then its italic if the family has one.
+ * Families without italics are slanted by the browser (text.ts always asks
+ * for italic when it's on).
+ */
 export function resolveWeight(family: string, weight: number, italic: boolean): { weight: number; italic: boolean } {
   const fam = findFamily(family);
   if (!fam) return { weight, italic };
-  const faces = fam.faces.filter((f) => f.italic === italic);
-  const pool = faces.length ? faces : fam.faces;
-  let best = pool[0];
-  for (const f of pool) if (Math.abs(f.weight - weight) < Math.abs(best.weight - weight)) best = f;
-  return { weight: best.weight, italic: best.italic };
+  let best = fam.faces[0].weight;
+  for (const f of fam.faces) if (Math.abs(f.weight - weight) < Math.abs(best - weight)) best = f.weight;
+  return { weight: best, italic: italic && fam.faces.some((f) => f.weight === best && f.italic) };
 }
 
 function key(family: string, weight: number, italic: boolean) {
@@ -64,7 +68,9 @@ export function ensureFont(family: string, weight: number, italic: boolean): Pro
         if (!set) return;
         const face = new FontFace(family, customFonts.get(family)!);
         await face.load();
+        if (!customFonts.has(family)) return; // unregistered while loading
         set.add(face);
+        customFaces.set(family, face);
         ready.add(k);
         listeners.forEach((l) => l());
       })().catch((e) => console.warn('Custom font failed to load', family, e));
@@ -106,6 +112,18 @@ export function ensureFont(family: string, weight: number, italic: boolean): Pro
 export function registerCustomFont(family: string, data: ArrayBuffer): Promise<void> {
   customFonts.set(family, data);
   return ensureFont(family, 400, false);
+}
+
+/** Forget a custom font (its project closed or the font was removed), so preview matches export. */
+export function unregisterCustomFont(family: string) {
+  if (!customFonts.delete(family)) return;
+  const face = customFaces.get(family);
+  if (face) fontSet()?.delete(face);
+  customFaces.delete(family);
+  const k = key(family, 0, false);
+  loaded.delete(k);
+  ready.delete(k);
+  listeners.forEach((l) => l());
 }
 
 export function customFontFamilies(): string[] {

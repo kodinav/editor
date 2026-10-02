@@ -141,6 +141,7 @@ export function MenuLayer() {
         );
       })}
     </div>,
-    document.body,
+    // Inside an open modal <dialog> everything else is inert: the menu has to live in the dialog.
+    [...document.querySelectorAll('dialog[open]')].pop() ?? document.body,
   );
 }

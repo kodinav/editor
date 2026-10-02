@@ -133,7 +133,7 @@ export function CaptionsPanel() {
               <button className="btn small" onClick={() => openImportPicker({}, '.srt,.vtt')}>
                 <Upload size={13} /> Import
               </button>
-              <button className="btn small" onClick={() => setAuto(true)}>
+              <button className="btn small" onClick={() => setAuto(true)} aria-label="Generate captions automatically" data-tip="Generate captions automatically">
                 <Wand2 size={13} /> Auto
               </button>
             </div>

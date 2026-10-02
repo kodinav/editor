@@ -226,20 +226,20 @@ function CaptionClipSection({ clipId }: { clipId: string }) {
           onChange={(e) => {
             const v = e.target.value;
             setDraft(v);
-            if (!editor().gestureBase) editor().beginGesture('Edit caption');
-            editor().updateGesture((d) => {
-              const c = d.clips[clipId];
-              if (c?.type === 'caption') {
-                c.text = v;
-                c.name = v.slice(0, 40);
-                c.words = undefined;
-              }
-            });
+            editor().commit(
+              'Edit caption',
+              (d) => {
+                const c = d.clips[clipId];
+                if (c?.type === 'caption') {
+                  c.text = v;
+                  c.name = v.slice(0, 40);
+                  c.words = undefined;
+                }
+              },
+              { coalesce: `caption:${clipId}` },
+            );
           }}
-          onBlur={() => {
-            setDraft(null);
-            editor().endGesture();
-          }}
+          onBlur={() => setDraft(null)}
           onKeyDown={(e) => e.stopPropagation()}
         />
         <p className="subtle insp-note">Drag the caption’s edges on the timeline to change when it appears. Style applies to all captions on this track.</p>

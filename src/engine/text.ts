@@ -31,7 +31,7 @@ function mctx(): OffscreenCanvasRenderingContext2D {
 
 function fontString(style: TextStyle, size: number): string {
   const r = resolveWeight(style.fontFamily, style.fontWeight, style.italic);
-  return `${r.italic ? 'italic ' : ''}${r.weight} ${size}px ${cssFontFamily(style.fontFamily)}`;
+  return `${style.italic ? 'italic ' : ''}${r.weight} ${size}px ${cssFontFamily(style.fontFamily)}`;
 }
 
 const supportsLetterSpacing = typeof OffscreenCanvasRenderingContext2D !== 'undefined' && 'letterSpacing' in OffscreenCanvasRenderingContext2D.prototype;

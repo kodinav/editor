@@ -78,30 +78,30 @@ export function Gizmo({ stageW, stageH }: { stageW: number; stageH: number }) {
   function capture(e: React.PointerEvent, onMove: (ev: PointerEvent) => void, label: string) {
     e.preventDefault();
     e.stopPropagation();
-    const target = e.currentTarget as Element;
-    target.setPointerCapture(e.pointerId);
+    const id = e.pointerId;
+    (e.currentTarget as Element).setPointerCapture(id);
     editor().beginGesture(label);
     setDragging(true);
-    const move = (ev: PointerEvent) => onMove(ev);
-    const up = () => {
-      target.removeEventListener('pointermove', move as EventListener);
-      target.removeEventListener('pointerup', up);
-      target.removeEventListener('pointercancel', cancel);
-      editor().endGesture();
+    // Listen on the window: the handle may unmount mid-drag (Escape deselects, Delete removes
+    // the clip), and the gesture must still end when the pointer is released.
+    const move = (ev: PointerEvent) => {
+      if (ev.pointerId === id) onMove(ev);
+    };
+    const finish = (ev: PointerEvent, keep: boolean) => {
+      if (ev.pointerId !== id) return;
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+      window.removeEventListener('pointercancel', cancel);
+      if (keep) editor().endGesture();
+      else editor().cancelGesture();
       setGuides({});
       setDragging(false);
     };
-    const cancel = () => {
-      target.removeEventListener('pointermove', move as EventListener);
-      target.removeEventListener('pointerup', up);
-      target.removeEventListener('pointercancel', cancel);
-      editor().cancelGesture();
-      setGuides({});
-      setDragging(false);
-    };
-    target.addEventListener('pointermove', move as EventListener);
-    target.addEventListener('pointerup', up);
-    target.addEventListener('pointercancel', cancel);
+    const up = (ev: PointerEvent) => finish(ev, true);
+    const cancel = (ev: PointerEvent) => finish(ev, false);
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', cancel);
   }
 
   function startMove(e: React.PointerEvent, id: string, geom: LayerGeometry) {

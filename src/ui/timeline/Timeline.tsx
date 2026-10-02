@@ -355,7 +355,8 @@ export function Timeline({ compact }: { compact?: boolean }) {
         onDrop={onDrop}
         data-drop-zone="timeline"
         role="application"
-        aria-label="Timeline"
+        aria-label="Timeline. D selects the clip at the playhead, [ and ] the previous and next clip, Alt+Up and Alt+Down change track."
+        tabIndex={0}
       >
         <div className="tl-inner" style={{ width: headerW + contentW, height: Math.max(innerH, viewH) }}>
           <Ruler headerW={headerW} pxPerSec={pxPerSec} x0={Math.max(0, scrollX - 100)} x1={scrollX + viewW + 100} />

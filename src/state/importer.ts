@@ -12,7 +12,7 @@ import {
 import type { Asset, Clip, Project } from '@/core/types';
 import { registerCustomFont } from '@/engine/fonts';
 import { analysis } from '@/media/analysis';
-import { bitmapToPng, categorize, decodeImage, extOf, probeAV, ProbeError } from '@/media/probe';
+import { categorize, normalizeImageFile, probeAV, ProbeError } from '@/media/probe';
 import { media, MAX_IMAGE_DIM } from '@/media/registry';
 import { makeImageThumb } from '@/media/imageThumb';
 import { probeAnimation } from '@/media/animatedImage';
@@ -76,16 +76,16 @@ async function prepareAsset(file: File, kind: Asset['kind']): Promise<{ asset: A
   const warnings: string[] = [];
   try {
     if (kind === 'image') {
-      const bmp = await decodeImage(file, MAX_IMAGE_DIM);
-      if (extOf(file.name) === 'svg') {
-        const png = await bitmapToPng(bmp);
-        usedFile = new File([png], file.name.replace(/\.svg$/i, '.png'), { type: 'image/png', lastModified: file.lastModified });
+      // SVGs are stored as PNG so every later step (workers, export) sees plain pixels.
+      const { file: normalized, bitmap: bmp, converted } = await normalizeImageFile(file, MAX_IMAGE_DIM);
+      if (converted) {
+        usedFile = normalized;
         media.setFile(id, usedFile);
       }
       const thumb = await makeImageThumb(id, bmp);
       await putThumbs(thumb);
       media.setThumbs(id, thumb);
-      const anim = extOf(file.name) === 'svg' ? null : await probeAnimation(file);
+      const anim = converted ? null : await probeAnimation(file);
       updateAsset(id, {
         image: { width: bmp.width, height: bmp.height, animated: !!anim },
         duration: anim ? anim.duration : 0,
@@ -103,8 +103,10 @@ async function prepareAsset(file: File, kind: Asset['kind']): Promise<{ asset: A
       } catch {
         throw new ProbeError('This font file could not be read.');
       }
+      // Record the family first: the project's fonts are kept in sync with its assets.
+      updateAsset(id, { font: { family } });
       await registerCustomFont(family, buf);
-      updateAsset(id, { font: { family }, status: 'ready' });
+      updateAsset(id, { status: 'ready' });
     } else {
       const info = await probeAV(file, kind === 'audio' ? 'audio' : 'video');
       warnings.push(...info.warnings);
@@ -143,7 +145,7 @@ async function startBackgroundWork(asset: Asset, file: File) {
       if (res.stored) {
         updateAsset(id, { stored: true });
         const f = await getFile(DIRS.media, id);
-        if (f) media.setFile(id, new File([f], asset.name, { type: file.type, lastModified: asset.lastModified }));
+        if (f) media.setFile(id, new File([f], asset.name, { type: editor().project.assets[id]?.mimeType ?? file.type, lastModified: asset.lastModified }));
       } else if (res.storeError) {
         toast({
           kind: 'warning',
@@ -340,15 +342,16 @@ export async function relinkAsset(assetId: string, file: File): Promise<void> {
         toast({ kind: 'warning', message: 'The new file has a different duration.', detail: 'Clips were kept as they are; check their timing.' });
       }
     } else if (asset.kind === 'image') {
-      const bmp = await decodeImage(file);
-      media.setImage(assetId, bmp);
+      const { file: normalized, bitmap, converted } = await normalizeImageFile(file, MAX_IMAGE_DIM);
+      media.setImage(assetId, bitmap);
+      if (converted) file = normalized;
     }
   } catch (e) {
     toast({ kind: 'error', message: 'That file could not be used.', detail: (e as Error).message });
     return;
   }
   media.setFile(assetId, file);
-  updateAsset(assetId, { status: 'ready', error: undefined, stored: false, name: asset.name, size: file.size, lastModified: file.lastModified });
+  updateAsset(assetId, { status: 'ready', error: undefined, stored: false, name: asset.name, mimeType: file.type || asset.mimeType, size: file.size, lastModified: file.lastModified });
   void startBackgroundWork(editor().project.assets[assetId], file);
   toast({ kind: 'success', message: `Relinked “${asset.name}”.` });
 }

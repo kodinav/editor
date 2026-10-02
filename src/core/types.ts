@@ -168,6 +168,8 @@ export interface Effect {
   type: string;
   enabled: boolean;
   params: Record<string, number | string | boolean>;
+  /** Added by a one-click look (replaced when another look is applied). */
+  look?: boolean;
 }
 
 export type AnimationPreset =

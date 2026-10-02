@@ -91,9 +91,10 @@ export class PreviewSources implements FrameSources {
     this.evict(new Set(wanted.map((w) => w.key)));
   }
 
-  /** Warm up readers for clips about to start (avoids a stall at cuts). */
-  preroll(desc: FrameDesc) {
+  /** Warm up readers for clips about to start (avoids a stall at cuts). `playing` clips are left alone. */
+  preroll(desc: FrameDesc, playing: Set<string> = new Set()) {
     for (const w of videoSourcesIn(desc)) {
+      if (playing.has(w.key)) continue;
       const e = this.entry(w.key, w.assetId);
       if (!e || e.error) continue;
       const cur = e.reader?.current;
@@ -119,6 +120,17 @@ export class PreviewSources implements FrameSources {
     this.entries.delete(e.clipId);
     e.reader?.dispose();
     e.input?.dispose();
+  }
+
+  /** Decoder statistics (diagnostics and tests). */
+  stats(): { readers: number; restarts: number; frames: Record<string, number | null> } {
+    let restarts = 0;
+    const frames: Record<string, number | null> = {};
+    for (const e of this.entries.values()) {
+      restarts += e.reader?.restarts ?? 0;
+      frames[e.clipId] = e.reader?.current?.timestamp ?? null;
+    }
+    return { readers: this.entries.size, restarts, frames };
   }
 
   /** Errors from video readers (e.g. decode failures) for UI reporting. */

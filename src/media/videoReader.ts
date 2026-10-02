@@ -27,6 +27,8 @@ export class VideoReader {
   private waiters: { t: number; resolve: (s: VideoSample | null) => void; reject: (e: unknown) => void }[] = [];
   lastError: unknown = null;
   firstTimestamp = 0;
+  /** How often decoding restarted from a keyframe (a seek); continuous playback shouldn't add any. */
+  restarts = 0;
 
   constructor(
     private readonly sink: VideoSampleSink,
@@ -128,6 +130,7 @@ export class VideoReader {
   }
 
   private async restart(t: number) {
+    this.restarts++;
     this.resetStream();
     this.cur?.close();
     this.cur = null;

@@ -111,7 +111,11 @@ export const SHORTCUTS: Shortcut[] = [
   sc('text', 'Editing', 'Add text', ['t'], () => void A.addTextPreset('title')),
   sc('freeze', 'Editing', 'Freeze frame', ['shift+f'], () => A.freezeFrame()),
   sc('detach', 'Editing', 'Detach audio', ['mod+shift+d'], () => A.detachAudioSelection()),
-  sc('selectUnder', 'Editing', 'Select clip at playhead', ['d'], () => A.selectClipAtPlayhead()),
+  sc('selectUnder', 'Editing', 'Select clip at playhead (press again for the clip below)', ['d'], () => A.selectClipAtPlayhead()),
+  sc('selectPrev', 'Editing', 'Select previous clip on the track', ['['], () => A.selectSiblingClip(-1)),
+  sc('selectNext', 'Editing', 'Select next clip on the track', [']'], () => A.selectSiblingClip(1)),
+  sc('selectUp', 'Editing', 'Select clip on the track above', ['alt+arrowup'], () => A.selectClipOnAdjacentTrack(-1)),
+  sc('selectDown', 'Editing', 'Select clip on the track below', ['alt+arrowdown'], () => A.selectClipOnAdjacentTrack(1)),
 
   sc('toolSelect', 'Timeline', 'Selection tool', ['v'], () => editor().set('tool', 'select')),
   sc('toolRazor', 'Timeline', 'Blade tool', ['c', 'b'], () => editor().set('tool', 'razor')),
