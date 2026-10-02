@@ -449,7 +449,7 @@ test('projects can be duplicated and deleted from the Projects dialog', async ({
   await cards().first().click();
   await page.getByRole('menuitem', { name: 'Duplicate' }).click();
   await expect(cards()).toHaveCount(2);
-  await cards().nth(1).click();
+  await page.getByRole('dialog').getByRole('button', { name: /^More options for .*\(copy\)$/ }).click();
   await page.getByRole('menuitem', { name: 'Delete' }).click();
   await expect(cards()).toHaveCount(1);
 });
@@ -589,9 +589,11 @@ test('a typed value lands on the clip it was typed for, and just tabbing through
   await page.keyboard.press('t'); // clip A at 0
   await seek(page, 6);
   await page.keyboard.press('t'); // clip B at 6
+  await expect.poll(async () => (await state(page)).clips.length).toBe(2);
   const [a, b] = (await state(page)).clips.map((c) => c.id);
   await page.evaluate((id) => (window as any).__cutline.editor.getState().select([id]), a);
   const x = page.locator('.xy-field').first().getByRole('textbox', { name: 'X' });
+  await x.waitFor();
   const past = (await state(page)).past;
   await x.focus();
   await x.blur(); // focus and leave: no edit, no undo step
@@ -837,4 +839,61 @@ test('pressing L again fast-forwards (2×) and K stops', async ({ page }) => {
   await page.keyboard.press('k');
   const s = await page.evaluate(() => (window as any).__cutline.playback.getState());
   expect([s.playing, s.rate]).toEqual([false, 1]);
+});
+
+test('attributes can be copied between clips, and context menus open from the keyboard', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t'); // A
+  await seek(page, 6);
+  await page.keyboard.press('t'); // B
+  const [a, b] = (await state(page)).clips.map((c) => c.id);
+  await page.evaluate((id) => {
+    (window as any).__cutline.editor.getState().commit('Style A', (d: any) => {
+      const c = d.clips[id];
+      c.effects = [{ id: 'fxA', type: 'blur', enabled: true, params: { amount: 12 } }];
+      c.keyframes = { 'transform.opacity': [{ id: 'k1', t: 0, v: 0, ease: 'linear' }, { id: 'k2', t: 1, v: 1, ease: 'linear' }], 'fx.fxA.amount': [{ id: 'k3', t: 0, v: 30, ease: 'linear' }] };
+      c.style.color = '#ff00aa';
+    });
+    (window as any).__cutline.editor.getState().select([id]);
+  }, a);
+  await page.locator('.tl-scroll').focus();
+  await page.keyboard.press('ControlOrMeta+c');
+  await page.evaluate((id) => (window as any).__cutline.editor.getState().select([id]), b);
+  await page.keyboard.press('ControlOrMeta+Alt+v');
+  const pasted = await page.evaluate((id) => (window as any).__cutline.editor.getState().project.clips[id], b);
+  expect(pasted.effects.map((e: any) => e.type)).toEqual(['blur']);
+  expect(pasted.effects[0].id).not.toBe('fxA');
+  expect(Object.keys(pasted.keyframes).sort()).toEqual([`fx.${pasted.effects[0].id}.amount`, 'transform.opacity']);
+  expect(pasted.style.color).toBe('#ff00aa');
+  // Shift+F10 opens the selected clip's menu without a mouse.
+  await page.locator('.tl-scroll').focus();
+  await page.keyboard.press('Shift+F10');
+  await expect(page.getByRole('menuitem', { name: /Split at playhead/ })).toBeVisible();
+  await page.keyboard.press('Escape');
+});
+
+test('a long press opens context menus on touch screens', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['red.mp4']);
+  await waitForMediaReady(page);
+  const card = (await page.getByRole('listitem', { name: /red\.mp4/ }).boundingBox())!;
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const point = { x: card.x + card.width / 2, y: card.y + card.height / 3 };
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [point] });
+  await page.waitForTimeout(800);
+  await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(page.getByRole('menuitem', { name: /Relink file/ })).toBeVisible();
+});
+
+test('on a phone, Edit opens without a selection and Record audio opens the recorder', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openEditor(page);
+  await page.getByRole('navigation', { name: 'Editor tools' }).getByRole('button', { name: 'Edit' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Edit' });
+  await expect(sheet).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(sheet).toHaveCount(0);
+  await page.getByRole('button', { name: 'Record audio' }).click();
+  await expect(page.getByRole('region', { name: 'Voiceover recorder' })).toBeVisible();
 });

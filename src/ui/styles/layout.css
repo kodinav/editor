@@ -384,3 +384,16 @@
     padding: 6px 10px;
   }
 }
+
+.sheet-head {
+  position: relative;
+  flex-shrink: 0;
+}
+.sheet-close {
+  position: absolute;
+  right: 8px;
+  top: 4px;
+}
+.sheet:focus {
+  outline: none;
+}

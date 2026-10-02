@@ -113,6 +113,55 @@ export function paste() {
   editor().select(out);
 }
 
+/**
+ * Apply the copied clip's look and motion — effects, colour, transform, crop, blend,
+ * animation presets, keyframes, text style and audio settings — to the selected clips.
+ */
+export function pasteAttributes() {
+  const src = clipboard[0] as unknown as Record<string, unknown> | undefined;
+  const ids = editor().selection;
+  if (!src || !ids.length) {
+    toast({ kind: 'info', message: 'Copy a clip, then select the clips to give its attributes to.' });
+    return;
+  }
+  let n = 0;
+  editor().commit('Paste attributes', (d) => {
+    for (const id of ids) {
+      const c = d.clips[id] as unknown as Record<string, unknown> | undefined;
+      if (!c || c.id === src.id) continue;
+      for (const key of ['transform', 'crop', 'fit', 'flipH', 'flipV', 'blendMode', 'color', 'cornerRadius', 'animIn', 'animOut', 'opacity', 'volume', 'pan']) {
+        if (key in src && key in c) c[key] = deepClone(src[key]);
+      }
+      const dur = c.duration as number;
+      for (const key of ['fadeIn', 'fadeOut']) if (key in src && key in c) c[key] = Math.min(dur, src[key] as number);
+      if (c.type === 'text' && src.type === 'text') c.style = deepClone(src.style);
+      // Effects get new ids; their keyframes follow them.
+      const ids2 = new Map<string, string>();
+      if (Array.isArray(src.effects) && Array.isArray(c.effects)) {
+        c.effects = (src.effects as { id: string }[]).map((e) => {
+          const nid = uid('fx');
+          ids2.set(e.id, nid);
+          return { ...deepClone(e), id: nid };
+        });
+      }
+      const keys: Record<string, unknown[]> = {};
+      for (const [path, list] of Object.entries(src.keyframes as Record<string, { t: number }[]>)) {
+        const parts = path.split('.');
+        if (parts[0] === 'fx') {
+          const nid = ids2.get(parts[1]);
+          if (!nid) continue;
+          parts[1] = nid;
+        } else if (!(parts[0] in c)) continue; // a property this clip doesn't have
+        const kept = list.filter((k) => k.t <= dur + 1e-6).map((k) => ({ ...deepClone(k), id: uid('kf') }));
+        if (kept.length) keys[parts.join('.')] = kept;
+      }
+      c.keyframes = keys;
+      n++;
+    }
+  });
+  if (n) toast({ kind: 'success', message: `Pasted attributes onto ${n} clip${n > 1 ? 's' : ''}.`, timeout: 2000 });
+}
+
 export function hasClipboard() {
   return clipboard.length > 0;
 }

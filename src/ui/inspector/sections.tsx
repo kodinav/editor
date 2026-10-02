@@ -162,7 +162,7 @@ function XYField({ clip, path, label }: { clip: Clip; path: string; label: strin
         onEnd={ed.end}
         onChange={(n) => ed.change((c, t) => writeProp(c, path, t, n))}
       />
-      <KeyframeToggle clip={clip} path={path} />
+      <KeyframeToggle clip={clip} path={path} name={`${label} position`} />
     </div>
   );
 }

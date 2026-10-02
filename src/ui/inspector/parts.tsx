@@ -38,11 +38,17 @@ export function clipEditor(clipId: string, label: string) {
   };
 }
 
-export function KeyframeToggle({ clip, path }: { clip: Clip; path: string }) {
+/** A readable name for a property path ("transform.opacity" → "opacity"). */
+function propName(path: string): string {
+  const last = path.split('.').pop() ?? path;
+  return last.replace(/([A-Z])/g, ' $1').toLowerCase();
+}
+
+export function KeyframeToggle({ clip, path, name = propName(path) }: { clip: Clip; path: string; name?: string }) {
   const animated = hasKeyframes(clip, path);
   const lt = useLocalTime(clip, animated);
   const at = animated ? keyframeAt(clip, path, lt) : undefined;
-  const label = animated ? (at ? 'Remove keyframe' : 'Add keyframe') : 'Animate this property';
+  const label = animated ? (at ? `Remove ${name} keyframe` : `Add ${name} keyframe`) : `Animate ${name}`;
   const kfs = clip.keyframes[path] ?? [];
   const prev = [...kfs].reverse().find((k) => k.t < lt - KF_EPS * 20);
   const next = kfs.find((k) => k.t > lt + KF_EPS * 20);
@@ -64,14 +70,14 @@ export function KeyframeToggle({ clip, path }: { clip: Clip; path: string }) {
   return (
     <span className="kf-ctl">
       {animated && (
-        <button className="kf-nav" aria-label="Previous keyframe" disabled={!prev} onClick={() => prev && player.seek(clip.start + prev.t)}>
+        <button className="kf-nav" aria-label={`Previous ${name} keyframe`} disabled={!prev} onClick={() => prev && player.seek(clip.start + prev.t)}>
           <ChevronLeft size={12} />
         </button>
       )}
       <button
         className={`kf-btn${animated ? ' animated' : ''}${at ? ' on' : ''}`}
         aria-label={label}
-        data-tip={animated ? `${label} · right-click for easing / stop animating` : label}
+        data-tip={animated ? `${label} · right-click (or Shift+F10) for easing / stop animating` : label}
         aria-pressed={!!at}
         onClick={toggle}
         onContextMenu={(e) =>
@@ -106,7 +112,7 @@ export function KeyframeToggle({ clip, path }: { clip: Clip; path: string }) {
         <Diamond size={11} fill={at ? 'currentColor' : 'none'} />
       </button>
       {animated && (
-        <button className="kf-nav" aria-label="Next keyframe" disabled={!next} onClick={() => next && player.seek(clip.start + next.t)}>
+        <button className="kf-nav" aria-label={`Next ${name} keyframe`} disabled={!next} onClick={() => next && player.seek(clip.start + next.t)}>
           <ChevronRight size={12} />
         </button>
       )}
@@ -155,7 +161,7 @@ export function AnimProp({
       onBegin={ed.begin}
       onEnd={ed.end}
       onChange={(v) => ed.change((c, t) => writeProp(c, path, t, v))}
-      trailing={animatable ? <KeyframeToggle clip={clip} path={path} /> : undefined}
+      trailing={animatable ? <KeyframeToggle clip={clip} path={path} name={label.toLowerCase()} /> : undefined}
     />
   );
 }
@@ -183,7 +189,7 @@ export function VolumeProp({ clip, path = 'volume', label = 'Volume' }: { clip: 
       onBegin={ed.begin}
       onEnd={ed.end}
       onChange={(v) => ed.change((c, t) => writeProp(c, path, t, fromDb(v)))}
-      trailing={<KeyframeToggle clip={clip} path={path} />}
+      trailing={<KeyframeToggle clip={clip} path={path} name={label.toLowerCase()} />}
     />
   );
 }

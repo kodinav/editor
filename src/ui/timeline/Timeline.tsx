@@ -5,6 +5,7 @@ import {
   Eye,
   EyeOff,
   Film,
+  Diamond,
   Headphones,
   Lock,
   Magnet,
@@ -204,6 +205,30 @@ export function Timeline({ compact }: { compact?: boolean }) {
     const clipEl = target.closest<HTMLElement>('[data-clip]');
     const t = timeAtClientX(ctx, e.clientX);
     const row = rowAtY(rows, yInTracks(ctx, e.clientY));
+    const kfEl = target.closest<HTMLElement>('[data-kf]');
+    if (kfEl && clipEl) {
+      const id = clipEl.dataset.clip!;
+      const kt = Number(kfEl.dataset.kf);
+      openContextMenu(e, [
+        { label: 'Go to keyframe', icon: <Diamond size={14} />, onClick: () => player.seek(editor().project.clips[id].start + kt) },
+        {
+          label: 'Delete keyframes here',
+          icon: <Trash2 size={14} />,
+          danger: true,
+          onClick: () =>
+            editor().commit('Delete keyframes', (d) => {
+              const c = d.clips[id];
+              if (!c) return;
+              for (const [path, list] of Object.entries(c.keyframes)) {
+                const keep = list.filter((k) => Math.abs(k.t - kt) >= 0.01);
+                if (keep.length) c.keyframes[path] = keep;
+                else delete c.keyframes[path];
+              }
+            }),
+        },
+      ]);
+      return;
+    }
     if (clipEl) {
       const id = clipEl.dataset.clip!;
       if (!editor().selection.includes(id)) editor().select([id]);
@@ -786,6 +811,7 @@ function clipMenu(id: string): MenuItem[] {
   const items: MenuItem[] = [
     { label: 'Split at playhead', icon: <Scissors size={14} />, kbd: 'S', disabled: !under, onClick: () => A.splitAtPlayhead() },
     { label: 'Copy', kbd: `${MOD}C`, onClick: () => A.copySelection() },
+    { label: 'Paste attributes', kbd: `${MOD}⌥V`, disabled: !A.hasClipboard(), onClick: () => A.pasteAttributes() },
     { label: 'Cut', kbd: `${MOD}X`, onClick: () => A.cutSelection() },
     { label: 'Duplicate', icon: <Copy size={14} />, kbd: `${MOD}D`, onClick: () => A.duplicateSelection() },
   ];

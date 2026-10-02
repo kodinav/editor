@@ -91,6 +91,7 @@ export const SHORTCUTS: Shortcut[] = [
   sc('redo', 'Editing', 'Redo', ['mod+shift+z', 'mod+y'], () => editor().redo(), true),
   sc('copy', 'Editing', 'Copy', ['mod+c'], () => A.copySelection()),
   sc('cut', 'Editing', 'Cut', ['mod+x'], () => A.cutSelection()),
+  sc('pasteAttributes', 'Editing', 'Paste attributes (effects, colour, motion) onto selection', ['mod+alt+v'], () => A.pasteAttributes()),
   sc('paste', 'Editing', 'Paste at playhead', ['mod+v'], () => A.paste()),
   sc('duplicate', 'Editing', 'Duplicate', ['mod+d'], () => A.duplicateSelection()),
   sc('selectAll', 'Editing', 'Select all clips', ['mod+a'], () => A.selectAll()),
@@ -187,9 +188,31 @@ export function isTypingTarget(t: EventTarget | null): boolean {
   return false;
 }
 
+/**
+ * Shift+F10 / the Menu key open the context menu of whatever has focus — or of the
+ * selected clip when the timeline (or nothing) has focus — so every right-click menu
+ * is reachable from the keyboard.
+ */
+function openContextMenuFromKeyboard(): boolean {
+  let el = document.activeElement as HTMLElement | null;
+  if (!el || el === document.body || el.classList.contains('tl-scroll')) {
+    const sel = editor().selection;
+    const clip = sel.length === 1 ? document.querySelector<HTMLElement>(`[data-clip="${sel[0]}"]`) : null;
+    if (clip) el = clip;
+  }
+  if (!el || el === document.body) return false;
+  const r = el.getBoundingClientRect();
+  el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: r.left + Math.min(r.width / 2, 40), clientY: r.top + r.height / 2 }));
+  return true;
+}
+
 export function installShortcuts(): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (e.defaultPrevented) return;
+    if ((e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) && !document.querySelector('.menu')) {
+      if (openContextMenuFromKeyboard()) e.preventDefault();
+      return;
+    }
     if (isTypingTarget(e.target)) return;
     // Open dialogs handle their own keys (Escape closes them natively).
     if (document.querySelector('dialog[open]')) return;
@@ -222,11 +245,41 @@ export function installShortcuts(): () => void {
     const el = e.target as HTMLElement;
     if (el.tagName === 'SELECT' && performance.now() - lastPointer < 2000 && !el.closest('dialog')) el.blur();
   };
+  // Touch: a long press opens the context menu (iOS never fires contextmenu by itself).
+  let press: { id: number; x: number; y: number; target: EventTarget | null; timer: number } | null = null;
+  const endPress = () => {
+    if (press) clearTimeout(press.timer);
+    press = null;
+  };
+  const onTouchDown = (e: PointerEvent) => {
+    endPress();
+    if (e.pointerType !== 'touch') return;
+    const p = { id: e.pointerId, x: e.clientX, y: e.clientY, target: e.target, timer: 0 };
+    p.timer = window.setTimeout(() => {
+      press = null;
+      p.target?.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: p.x, clientY: p.y }));
+    }, 550);
+    press = p;
+  };
+  const onTouchMove = (e: PointerEvent) => {
+    if (press && e.pointerId === press.id && Math.hypot(e.clientX - press.x, e.clientY - press.y) > 10) endPress();
+  };
+  window.addEventListener('pointerdown', onTouchDown, true);
+  window.addEventListener('pointermove', onTouchMove, true);
+  window.addEventListener('pointerup', endPress, true);
+  window.addEventListener('pointercancel', endPress, true);
+  window.addEventListener('contextmenu', endPress, true); // the platform opened one itself
   window.addEventListener('keydown', onKey);
   window.addEventListener('pointerdown', onPointer, true);
   window.addEventListener('click', onClick);
   window.addEventListener('change', onChange);
   return () => {
+    endPress();
+    window.removeEventListener('pointerdown', onTouchDown, true);
+    window.removeEventListener('pointermove', onTouchMove, true);
+    window.removeEventListener('pointerup', endPress, true);
+    window.removeEventListener('pointercancel', endPress, true);
+    window.removeEventListener('contextmenu', endPress, true);
     window.removeEventListener('keydown', onKey);
     window.removeEventListener('pointerdown', onPointer, true);
     window.removeEventListener('click', onClick);

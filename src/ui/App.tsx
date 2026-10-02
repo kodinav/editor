@@ -1,5 +1,5 @@
-import { useEffect, useState, lazy, Suspense, type ReactNode } from 'react';
-import { Download, Film, LayoutGrid, Sparkles, Type, SlidersHorizontal, Upload } from 'lucide-react';
+import { useEffect, useRef, useState, lazy, Suspense, type ReactNode } from 'react';
+import { Download, Film, LayoutGrid, Sparkles, Type, SlidersHorizontal, Upload, X } from 'lucide-react';
 import { useEditor } from '@/state/store';
 import { importFiles } from '@/state/importer';
 import { stealLock } from '@/state/projectManager';
@@ -163,20 +163,55 @@ function DesktopWorkspace({ layout }: { layout: Layout }) {
 
 type PhoneTab = 'media' | 'text' | 'effects' | 'edit' | null;
 
+const SHEET_LABEL: Record<Exclude<PhoneTab, null>, string> = { media: 'Media', text: 'Text', effects: 'Effects', edit: 'Edit' };
+
 function PhoneWorkspace() {
   const [tab, setTab] = useState<PhoneTab>(null);
   const set = useEditor((s) => s.set);
-  const selection = useEditor((s) => s.selection);
+  const sheetRef = useRef<HTMLDivElement>(null);
+  const opener = useRef<HTMLElement | null>(null);
+  // Other parts of the UI (e.g. "Record audio" in the empty state) ask for a library panel by
+  // opening the left panel; on a phone that panel lives in a sheet.
+  useEffect(
+    () =>
+      useEditor.subscribe((s, prev) => {
+        if (s.leftOpen && !prev.leftOpen) setTab(s.leftPanel === 'text' ? 'text' : s.leftPanel === 'effects' ? 'effects' : 'media');
+      }),
+    [],
+  );
+  useEffect(() => {
+    if (!tab) {
+      // No sheet open = no left panel open, so the next request to open one is noticed.
+      useEditor.getState().set('leftOpen', false);
+      opener.current?.focus();
+      return;
+    }
+    sheetRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setTab(null);
+      }
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [tab]);
   const sheet = (content: ReactNode) => (
     <>
       <div className="sheet-backdrop" onClick={() => setTab(null)} />
-      <div className="sheet" role="dialog" aria-modal="true">
-        <div className="sheet-grip" />
+      <div className="sheet" role="dialog" aria-modal="true" aria-label={tab ? SHEET_LABEL[tab] : undefined} tabIndex={-1} ref={sheetRef}>
+        <div className="sheet-head">
+          <div className="sheet-grip" />
+          <button className="icon-btn small sheet-close" aria-label={`Close ${tab ? SHEET_LABEL[tab] : ''}`} onClick={() => setTab(null)}>
+            <X size={16} />
+          </button>
+        </div>
         {content}
       </div>
     </>
   );
   const open = (t: Exclude<PhoneTab, null>) => {
+    opener.current = document.activeElement as HTMLElement | null;
     if (t === 'media') set('leftPanel', 'media');
     if (t === 'text') set('leftPanel', 'text');
     if (t === 'effects') set('leftPanel', 'effects');
@@ -203,7 +238,7 @@ function PhoneWorkspace() {
           <Sparkles size={18} />
           Effects
         </button>
-        <button aria-pressed={tab === 'edit'} onClick={() => open('edit')} disabled={selection.length === 0 && tab !== 'edit'}>
+        <button aria-pressed={tab === 'edit'} onClick={() => open('edit')}>
           <SlidersHorizontal size={18} />
           Edit
         </button>

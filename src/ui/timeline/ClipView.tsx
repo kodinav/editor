@@ -107,7 +107,7 @@ function ClipViewInner({ clip, asset, pxPerSec, top, height, selected, viewX0, v
         </>
       )}
       {kfTimes.map((t) => (
-        <div key={t} className="kf-diamond" data-kf={t} style={{ left: t * pxPerSec }} title="Keyframe — drag to retime, click to jump" />
+        <div key={t} className="kf-diamond" data-kf={t} style={{ left: t * pxPerSec }} title="Keyframe — drag to retime, click to jump, right-click to delete" />
       ))}
       <div className="trim-handle start" data-handle="trim-start" aria-hidden="true" />
       <div className="trim-handle end" data-handle="trim-end" aria-hidden="true" />
