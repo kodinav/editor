@@ -297,6 +297,8 @@ export interface MediaSourceProps {
   speed: number;
   /** Preserve pitch when speed != 1. */
   preservePitch: boolean;
+  /** Play the same stretch of media backwards. */
+  reversed?: boolean;
 }
 
 export interface VideoClip extends ClipBase, VisualProps, AudioProps, MediaSourceProps {

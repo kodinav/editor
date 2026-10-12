@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useSyncExternalStore } from 'react';
-import { AlertTriangle, Captions, Gauge, Layers, Shapes, Snowflake, Sparkles, Type, VolumeX } from 'lucide-react';
+import { AlertTriangle, Captions, Gauge, Layers, Shapes, Snowflake, Sparkles, Type, VolumeX , Rewind } from 'lucide-react';
 import { allKeyframeTimes } from '@/core/keyframes';
 import type { Asset, Clip } from '@/core/types';
 import { media } from '@/media/registry';
@@ -74,6 +74,11 @@ function ClipViewInner({ clip, asset, pxPerSec, top, height, selected, viewX0, v
             <span className="clip-badge" title={`${speed}× speed`}>
               <Gauge size={10} />
               {speed}×
+            </span>
+          )}
+          {(clip.type === 'video' || clip.type === 'audio') && clip.reversed && !(clip.type === 'video' && clip.freeze) && (
+            <span className="clip-badge" title="Plays backwards">
+              <Rewind size={10} />
             </span>
           )}
           {clip.type === 'video' && clip.freeze && (
@@ -168,6 +173,9 @@ function ClipCanvas({
     const speed = clip.type === 'video' || clip.type === 'audio' ? clip.speed : 1;
     const sourceIn = clip.type === 'video' || clip.type === 'audio' ? clip.sourceIn : 0;
     const freeze = clip.type === 'video' && !!clip.freeze;
+    // Media time at a distance (px) into the clip; a reversed clip runs through its media from the end.
+    const reversed = (clip.type === 'video' || clip.type === 'audio') && !!clip.reversed;
+    const srcAt = (px: number) => sourceIn + (reversed ? clip.duration - px / pxPerSec : px / pxPerSec) * speed;
     const filmH = clip.type === 'audio' ? 0 : hasAudio && clip.type === 'video' ? Math.max(0, height - LABEL_H - Math.min(22, height * 0.32)) : height - LABEL_H;
     const filmTop = LABEL_H;
 
@@ -181,7 +189,7 @@ function ClipCanvas({
       const firstTile = Math.floor(x0 / tileW);
       for (let i = firstTile; i * tileW < x1; i++) {
         const xLocal = i * tileW;
-        const tAtTile = freeze ? sourceIn : sourceIn + ((xLocal + tileW / 2) / pxPerSec) * speed;
+        const tAtTile = freeze ? sourceIn : srcAt(xLocal + tileW / 2);
         const idx = Math.max(0, Math.min(m.count - 1, Math.round((tAtTile - m.start) / m.interval)));
         const sx = (idx % m.cols) * m.thumbWidth;
         const sy = Math.floor(idx / m.cols) * m.thumbHeight;
@@ -199,8 +207,8 @@ function ClipCanvas({
         const data = peaks.data;
         for (let x = 0; x < w; x++) {
           const lx = x0 + x;
-          const sA = sourceIn + (lx / pxPerSec) * speed;
-          const sB = sourceIn + ((lx + 1) / pxPerSec) * speed;
+          const sA = Math.min(srcAt(lx), srcAt(lx + 1));
+          const sB = Math.max(srcAt(lx), srcAt(lx + 1));
           let a = Math.floor(sA * rate);
           const b = Math.max(a + 1, Math.ceil(sB * rate));
           let mx = 0;

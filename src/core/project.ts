@@ -336,3 +336,22 @@ export function nextTrackName(project: Project, kind: TrackKind): string {
   while (names.has(`${base} ${n}`)) n++;
   return `${base} ${n}`;
 }
+
+/** The timing of a clip that plays media (a video or audio clip). */
+type MediaTiming = { start: number; duration: number; sourceIn: number; speed: number; reversed?: boolean };
+
+/**
+ * Media time (seconds into the file) that plays at timeline time `t`. A clip
+ * covers the media from `sourceIn` to `sourceIn + duration × speed`; a
+ * reversed clip runs through that same stretch from its end to its start.
+ */
+export function clipSourceTime(c: MediaTiming, t: number): number {
+  const lt = t - c.start;
+  return c.sourceIn + (c.reversed ? c.duration - lt : lt) * c.speed;
+}
+
+/** Timeline time at which media time `s` plays (the inverse of clipSourceTime). */
+export function clipTimeOfSource(c: MediaTiming, s: number): number {
+  const lt = (s - c.sourceIn) / c.speed;
+  return c.start + (c.reversed ? c.duration - lt : lt);
+}

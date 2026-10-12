@@ -1,5 +1,5 @@
 import { normalize, removeTimeRanges } from '@/core/ops';
-import { clipEnd } from '@/core/project';
+import { clipEnd, clipTimeOfSource } from '@/core/project';
 import { silentRegions, windowRms, type Region, type SilenceOptions } from '@/core/silence';
 import { media } from '@/media/registry';
 import { editor, toast } from './store';
@@ -40,7 +40,13 @@ export async function findSilences(clipId: string, opts: SilenceOptions, onProgr
   const regions = silentRegions(rms, s0, win / sr, opts);
   // Source time -> timeline time, clamped to the clip.
   return regions
-    .map((r) => ({ start: c.start + (r.start - s0) / c.speed, end: c.start + (r.end - s0) / c.speed }))
+    .map((r) => {
+      // A reversed clip plays its media from the end, so a pause's two edges swap places.
+      const a = clipTimeOfSource(c, r.start);
+      const b = clipTimeOfSource(c, r.end);
+      return { start: Math.min(a, b), end: Math.max(a, b) };
+    })
+    .sort((x, y) => x.start - y.start)
     .map((r) => ({ start: Math.max(c.start, r.start), end: Math.min(clipEnd(c), r.end) }))
     .filter((r) => r.end - r.start > 1 / editor().project.settings.fps);
 }

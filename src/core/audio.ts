@@ -1,5 +1,5 @@
 import { evalProp } from './keyframes';
-import { clipEnd } from './project';
+import { clipEnd, clipSourceTime } from './project';
 import { nextAdjacent, prevAdjacent } from './ops';
 import type { AudibleClip, Project, Track } from './types';
 import { isVisualClip } from './types';
@@ -83,7 +83,7 @@ export function clipPanAt(seg: AudioSegment, t: number): number {
 
 /** Map a timeline time to source time for an audible clip. */
 export function audioSourceTime(seg: AudioSegment, t: number): number {
-  return seg.clip.sourceIn + (t - seg.clip.start) * seg.clip.speed;
+  return clipSourceTime(seg.clip, t);
 }
 
 export function dbToGain(db: number): number {

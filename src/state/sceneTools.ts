@@ -1,5 +1,5 @@
 import { splitClip } from '@/core/ops';
-import { clipEnd } from '@/core/project';
+import { clipEnd, clipTimeOfSource } from '@/core/project';
 import { media } from '@/media/registry';
 import type { ScenesMessage, ScenesRequest } from '@/workers/scenes.worker';
 import { editor, toast } from './store';
@@ -30,7 +30,10 @@ export async function detectScenes(clipId: string, sensitivity: number, onProgre
       worker.postMessage(req);
     });
     // Source time -> timeline time.
-    return cuts.map((s) => c.start + (s - c.sourceIn) / c.speed).filter((t) => t > c.start + 1e-3 && t < clipEnd(c) - 1e-3);
+    return cuts
+      .map((s) => clipTimeOfSource(c, s))
+      .filter((t) => t > c.start + 1e-3 && t < clipEnd(c) - 1e-3)
+      .sort((a, b) => a - b);
   } finally {
     worker.terminate();
   }

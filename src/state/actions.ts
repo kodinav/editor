@@ -1,6 +1,6 @@
 import { deepClone } from '@/core/clone';
 import { createEffect, FILTER_PRESETS, NEUTRAL_COLOR } from '@/core/effects';
-import { isActiveAt } from '@/core/evaluate';
+import { isActiveAt, sourceTimeFor } from '@/core/evaluate';
 import { uid } from '@/core/ids';
 import {
   addTrack,
@@ -484,7 +484,7 @@ export function freezeFrame() {
   editor().commit('Freeze frame', (d) => {
     const tq = q(d, t);
     const c = d.clips[target.id] as VideoClip;
-    const srcT = c.sourceIn + (tq - c.start) * c.speed;
+    const srcT = sourceTimeFor(d, c, tq);
     const hold = 2;
     // Split at the playhead and push the remainder right by the freeze length; what comes
     // later on the other unlocked tracks moves too, so it stays in sync.

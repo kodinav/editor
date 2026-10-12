@@ -1062,8 +1062,24 @@ export function SpeedSection({ clip }: { clip: AudibleClip }) {
       <Row label="Keep pitch">
         <Switch label="Preserve audio pitch" checked={clip.preservePitch} onChange={(v) => editor().commit('Change pitch mode', (d) => void ((d.clips[clip.id] as AudibleClip).preservePitch = v))} />
       </Row>
+      {!(clip.type === 'video' && clip.freeze) && (
+        <Row label="Reverse">
+          <Switch
+            label="Play backwards"
+            checked={!!clip.reversed}
+            onChange={(v) =>
+              editor().commit(v ? 'Reverse clip' : 'Play clip forwards', (d) => {
+                const c = d.clips[clip.id] as AudibleClip;
+                if (v) c.reversed = true;
+                else delete c.reversed;
+              })
+            }
+          />
+        </Row>
+      )}
       <p className="subtle insp-note">
         Duration {formatShort(clip.duration)} · source {formatShort(clip.duration * clip.speed)}
+        {clip.reversed ? ' · playing backwards' : ''}
       </p>
       {clip.type === 'video' && (
         <button className="btn small block" onClick={() => A.freezeFrame()}>

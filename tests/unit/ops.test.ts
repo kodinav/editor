@@ -471,3 +471,63 @@ describe('roll, slip and slide', () => {
     expect(b.start).toBe(1);
   });
 });
+
+describe('reversed clips', () => {
+  // A 10 s source; the clip plays media 2 s..5 s backwards at timeline 10..13.
+  const rev = () => {
+    const { p, v1 } = setup();
+    const c = addVideo(p, v1, 10, 3, 2);
+    c.reversed = true;
+    return { p, c, v1 };
+  };
+  const shown = (p: Project, _c: VideoClip, t: number) => {
+    const l = evaluateFrame(p, t).layers[0] as any;
+    return l.source.time as number;
+  };
+
+  it('plays the same stretch of media from its end to its start', () => {
+    const { p, c } = rev();
+    const f = 1 / 30;
+    expect(shown(p, c, 10)).toBeCloseTo(5 - f, 6); // first frame = last frame of the stretch
+    expect(shown(p, c, 11.5)).toBeCloseTo(3.5 - f, 6);
+    expect(shown(p, c, 13 - f)).toBeCloseTo(2, 6); // last frame = first frame of the stretch
+    expect((evaluateFrame(p, 11).layers[0] as any).source.reverse).toBe(true);
+  });
+
+  it('splitting keeps every frame where it was', () => {
+    const { p, c } = rev();
+    const before = [10, 10.5, 11, 11.5, 12, 12.9].map((t) => shown(p, c, t));
+    const rightId = splitClip(p, c.id, 11)!;
+    const right = p.clips[rightId] as VideoClip;
+    expect([c.sourceIn, c.duration]).toEqual([4, 1]); // left piece: media 4..5
+    expect([right.sourceIn, right.duration, right.reversed]).toEqual([2, 2, true]); // right piece: media 2..4
+    const after = [10, 10.5, 11, 11.5, 12, 12.9].map((t) => (evaluateFrame(p, t).layers[0] as any).source.time);
+    after.forEach((v, i) => expect(v).toBeCloseTo(before[i], 6));
+  });
+
+  it('trimming an edge removes what plays there and leaves the rest untouched', () => {
+    const { p, c } = rev();
+    const mid = shown(p, c, 11.5);
+    trimStart(p, c.id, 11); // lose the first second of playback = the last second of the stretch
+    expect([c.start, c.duration, c.sourceIn]).toEqual([11, 2, 2]);
+    expect(shown(p, c, 11.5)).toBeCloseTo(mid, 6);
+    trimEnd(p, c.id, 12); // lose the last second of playback = the first second of the stretch
+    expect([c.duration, c.sourceIn]).toEqual([1, 3]);
+    expect(shown(p, c, 11.5)).toBeCloseTo(mid, 6);
+  });
+
+  it('edges extend only as far as the media goes, on the mirrored side', () => {
+    const { p, c } = rev();
+    trimStart(p, c.id, 0, { ignoreNeighbors: true }); // head grows into media after 5 s: only 5 s more
+    expect([c.start, c.duration, c.sourceIn]).toEqual([5, 8, 2]);
+    trimEnd(p, c.id, 100, { ignoreNeighbors: true }); // tail grows towards media 0: only 2 s more
+    expect([c.duration, c.sourceIn]).toEqual([10, 0]);
+  });
+
+  it('changing speed keeps the stretch of media', () => {
+    const { p, c } = rev();
+    setSpeed(p, c.id, 2);
+    expect([c.duration, c.sourceIn, c.speed]).toEqual([1.5, 2, 2]);
+    expect(shown(p, c, 10)).toBeCloseTo(5 - 2 / 30, 6);
+  });
+});

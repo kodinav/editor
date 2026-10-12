@@ -257,6 +257,7 @@ export function sanitizeClip(raw: Loose, assets: Record<string, Asset>): Clip | 
     sourceIn: num(raw.sourceIn, 0, 0, MAX_TIME),
     speed: num(raw.speed, 1, 0.1, 16),
     preservePitch: bool(raw.preservePitch, true),
+    ...(raw.reversed === true ? { reversed: true } : {}),
   });
   switch (raw.type) {
     case 'video':

@@ -1,7 +1,7 @@
 import { duckKeyframes, mergeActivity, type DuckOptions } from '@/core/ducking';
 import { uid } from '@/core/ids';
 import { evalProp } from '@/core/keyframes';
-import { clipEnd } from '@/core/project';
+import { clipEnd, clipSourceTime, clipTimeOfSource } from '@/core/project';
 import { windowRms, type Region } from '@/core/silence';
 import type { AudibleClip } from '@/core/types';
 import { media } from '@/media/registry';
@@ -21,10 +21,10 @@ async function activityFor(source: AudibleClip, from: number, to: number, thresh
   const b = Math.min(to, clipEnd(source));
   if (b <= a) return [];
   const sr = pcm.sampleRate;
-  const s0 = source.sourceIn + (a - source.start) * source.speed;
-  const s1 = source.sourceIn + (b - source.start) * source.speed;
-  const f0 = Math.floor(s0 * sr);
-  const f1 = Math.ceil(s1 * sr);
+  const s0 = clipSourceTime(source, a);
+  const s1 = clipSourceTime(source, b);
+  const f0 = Math.floor(Math.min(s0, s1) * sr);
+  const f1 = Math.ceil(Math.max(s0, s1) * sr);
   const win = Math.max(1, Math.round(WIN * sr * source.speed));
   const thr = Math.pow(10, thresholdDb / 20);
   const out: Region[] = [];
@@ -37,12 +37,12 @@ async function activityFor(source: AudibleClip, from: number, to: number, thresh
       if (rms[i] < thr) continue;
       // Window start in timeline seconds.
       const srcT = (f + i * win) / sr;
-      const t = source.start + (srcT - source.sourceIn) / source.speed;
-      out.push({ start: t, end: t + WIN });
+      const t = clipTimeOfSource(source, srcT);
+      out.push(source.reversed ? { start: t - WIN, end: t } : { start: t, end: t + WIN });
     }
     await new Promise((r) => setTimeout(r, 0));
   }
-  return out;
+  return out.sort((x, y) => x.start - y.start);
 }
 
 export async function duckUnderSpeech(clipId: string, opts: DuckOptions & { thresholdDb: number }): Promise<void> {

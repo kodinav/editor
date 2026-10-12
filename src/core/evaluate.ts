@@ -1,6 +1,6 @@
 import { ease } from './easing';
 import { evalProp } from './keyframes';
-import { clipEnd, isVisualTrackKind } from './project';
+import { clipEnd, clipSourceTime, isVisualTrackKind } from './project';
 import { nextAdjacent } from './ops';
 import type {
   AdjustmentClip,
@@ -31,7 +31,7 @@ import { COLOR_PARAMS } from './effects';
  */
 
 export type LayerSource =
-  | { kind: 'video'; assetId: string; time: number }
+  | { kind: 'video'; assetId: string; time: number; /** Plays backwards: frames are needed in descending order. */ reverse?: boolean }
   | { kind: 'image'; assetId: string; /** Clip-local time (animated images loop on it). */ time: number; /** The format can be transparent. */ alpha?: boolean }
   | { kind: 'text'; clip: TextClip; visibleChars: number | null }
   | { kind: 'shape'; clip: ShapeClip }
@@ -115,7 +115,9 @@ export function visualTracksBottomUp(p: Project): Track[] {
 export function sourceTimeFor(p: Project, c: VideoClip, t: number): number {
   const asset = p.assets[c.assetId];
   const dur = asset?.duration ?? Infinity;
-  const raw = c.freeze ? c.sourceIn : c.sourceIn + (t - c.start) * c.speed;
+  // Backwards, each output frame shows what the mirrored forward frame would: the first one is
+  // the last frame of the stretch (not the frame just past its end).
+  const raw = c.freeze ? c.sourceIn : c.reversed ? Math.max(c.sourceIn, clipSourceTime(c, t + 1 / p.settings.fps)) : clipSourceTime(c, t);
   // Stay a hair inside the media so the decoder always has a frame.
   const maxT = Math.max(0, dur - 1e-3);
   return Math.min(Math.max(raw, 0), maxT);
@@ -262,7 +264,7 @@ export function buildClipLayer(p: Project, c: VisualClip, t: number): ClipLayer 
   let source: LayerSource;
   switch (c.type) {
     case 'video':
-      source = { kind: 'video', assetId: c.assetId, time: sourceTimeFor(p, c, t) };
+      source = { kind: 'video', assetId: c.assetId, time: sourceTimeFor(p, c, t), ...(c.reversed && !c.freeze ? { reverse: true } : {}) };
       break;
     case 'image':
       source = { kind: 'image', assetId: (c as ImageClip).assetId, time: rawLocal, alpha: /png|webp|gif|avif|svg/i.test(p.assets[(c as ImageClip).assetId]?.mimeType ?? '') };
@@ -421,10 +423,10 @@ export function imageAssetsIn(desc: FrameDesc): string[] {
   return [...out];
 }
 
-export function videoSourcesIn(desc: FrameDesc): { assetId: string; time: number; key: string }[] {
-  const out: { assetId: string; time: number; key: string }[] = [];
+export function videoSourcesIn(desc: FrameDesc): { assetId: string; time: number; key: string; reverse: boolean }[] {
+  const out: { assetId: string; time: number; key: string; reverse: boolean }[] = [];
   const visit = (l: ClipLayer) => {
-    if (l.source.kind === 'video') out.push({ assetId: l.source.assetId, time: l.source.time, key: l.clipId });
+    if (l.source.kind === 'video') out.push({ assetId: l.source.assetId, time: l.source.time, key: l.clipId, reverse: !!l.source.reverse });
   };
   for (const l of desc.layers) {
     if (l.type === 'clip') visit(l);

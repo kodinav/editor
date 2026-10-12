@@ -31,20 +31,33 @@ export function minDuration(p: Project): number {
   return MIN_CLIP_FRAMES / p.settings.fps;
 }
 
-/** Maximum timeline duration a media clip can have from its current sourceIn. */
-export function maxDurationFor(p: Project, c: Clip): number {
-  if (!hasSourceTiming(c)) return Infinity;
-  if (c.type === 'video' && c.freeze) return Infinity;
+/** Timeline seconds of unused media before the stretch a clip plays, and after it. */
+function mediaRoom(p: Project, c: Clip): { before: number; after: number } {
+  if (!hasSourceTiming(c) || (c.type === 'video' && c.freeze)) return { before: Infinity, after: Infinity };
   const asset = p.assets[c.assetId];
-  if (!asset || asset.duration <= 0) return Infinity;
-  return Math.max(0, (asset.duration - c.sourceIn) / c.speed);
+  const after = !asset || asset.duration <= 0 ? Infinity : (asset.duration - c.sourceIn) / c.speed - c.duration;
+  return { before: c.sourceIn / c.speed, after };
 }
 
-/** How far (timeline seconds) the head of a media clip may be extended to the left. */
-export function maxHeadExtension(c: Clip): number {
-  if (!hasSourceTiming(c)) return Infinity;
-  if (c.type === 'video' && c.freeze) return Infinity;
-  return c.sourceIn / c.speed;
+/**
+ * How far (timeline seconds) a clip's start edge may be pulled earlier before
+ * its media runs out. A reversed clip starts at the end of its stretch of
+ * media, so its head grows into the media that comes after.
+ */
+export function headRoom(p: Project, c: Clip): number {
+  const r = mediaRoom(p, c);
+  return hasSourceTiming(c) && c.reversed ? r.after : r.before;
+}
+
+/** How far (timeline seconds) a clip's end edge may be pushed later before its media runs out. */
+export function tailRoom(p: Project, c: Clip): number {
+  const r = mediaRoom(p, c);
+  return hasSourceTiming(c) && c.reversed ? r.before : r.after;
+}
+
+/** Maximum timeline duration a media clip can have with its start where it is. */
+export function maxDurationFor(p: Project, c: Clip): number {
+  return Math.max(0, c.duration + tailRoom(p, c));
 }
 
 function cloneClip<T extends Clip>(c: T): T {
@@ -74,7 +87,11 @@ export function splitClip(p: Project, clipId: ID, t: number): ID | null {
   pruneKeyframes(c.keyframes, c.duration);
 
   if (hasSourceTiming(right) && hasSourceTiming(c)) {
-    if (!(right.type === 'video' && right.freeze)) right.sourceIn = c.sourceIn + offset * c.speed;
+    if (!(right.type === 'video' && right.freeze)) {
+      // Forwards, the right piece starts later in the media; backwards, the left piece does.
+      if (c.reversed) c.sourceIn += right.duration * c.speed;
+      else right.sourceIn = c.sourceIn + offset * c.speed;
+    }
     right.fadeIn = 0;
     c.fadeOut = 0;
   }
@@ -109,6 +126,8 @@ export function splitClip(p: Project, clipId: ID, t: number): ID | null {
 export interface TrimOptions {
   /** Allow extending over neighbours (ripple edits move them out of the way themselves). */
   ignoreNeighbors?: boolean;
+  /** Use the time as given instead of rounding it to a frame (to meet a neighbour exactly). */
+  exact?: boolean;
 }
 
 /** End of the closest clip before `c` on its track (0 if none). */
@@ -140,7 +159,7 @@ export function trimStart(p: Project, clipId: ID, newStart: number, opts: TrimOp
   newStart = q(p, newStart);
   const end = clipEnd(c);
   const md = minDuration(p);
-  const earliest = c.start - maxHeadExtension(c);
+  const earliest = c.start - headRoom(p, c);
   newStart = Math.max(newStart, earliest, 0);
   if (!opts.ignoreNeighbors) newStart = Math.max(newStart, prevNeighborEnd(p, c));
   newStart = Math.min(newStart, end - md);
@@ -149,7 +168,8 @@ export function trimStart(p: Project, clipId: ID, newStart: number, opts: TrimOp
   if (Math.abs(delta) < EPS) return;
   c.start = newStart;
   c.duration = end - newStart;
-  if (hasSourceTiming(c) && !(c.type === 'video' && c.freeze)) {
+  // A reversed clip starts at the far end of its media, so trimming its head leaves sourceIn alone.
+  if (hasSourceTiming(c) && !(c.type === 'video' && c.freeze) && !c.reversed) {
     c.sourceIn = Math.max(0, c.sourceIn + delta * c.speed);
   }
   shiftKeyframes(c.keyframes, -delta);
@@ -162,11 +182,13 @@ export function trimStart(p: Project, clipId: ID, newStart: number, opts: TrimOp
 export function trimEnd(p: Project, clipId: ID, newEnd: number, opts: TrimOptions = {}): void {
   const c = p.clips[clipId];
   if (!c) return;
-  newEnd = q(p, newEnd);
+  if (!opts.exact) newEnd = q(p, newEnd);
   if (!opts.ignoreNeighbors) newEnd = Math.min(newEnd, nextNeighborStart(p, c));
   const md = minDuration(p);
   let dur = newEnd - c.start;
   dur = Math.max(md, Math.min(dur, maxDurationFor(p, c)));
+  // A reversed clip ends at the start of its media: a longer tail reaches further back into it.
+  if (hasSourceTiming(c) && c.reversed && !(c.type === 'video' && c.freeze)) c.sourceIn = Math.max(0, c.sourceIn - (dur - c.duration) * c.speed);
   c.duration = dur;
 }
 
@@ -180,12 +202,12 @@ export function rollEdit(p: Project, leftId: ID, rightId: ID, newCut: number): v
   const b = p.clips[rightId];
   if (!a || !b || a.trackId !== b.trackId) return;
   const md = minDuration(p);
-  const lo = Math.max(a.start + md, b.start - maxHeadExtension(b));
+  const lo = Math.max(a.start + md, b.start - headRoom(p, b));
   const hi = Math.min(clipEnd(b) - md, a.start + maxDurationFor(p, a));
   if (hi < lo - EPS) return;
   const cut = Math.min(hi, Math.max(lo, q(p, newCut)));
   trimStart(p, rightId, cut, { ignoreNeighbors: true });
-  a.duration = b.start - a.start;
+  trimEnd(p, leftId, b.start, { ignoreNeighbors: true, exact: true });
 }
 
 /**
@@ -216,7 +238,7 @@ export function slideClip(p: Project, clipId: ID, newStart: number): void {
   // How far the clip may travel left (negative) and right (positive).
   const left = Math.max(
     prev ? -(prev.duration - md) : -(c.start - prevNeighborEnd(p, c)),
-    next ? -maxHeadExtension(next) : -Infinity,
+    next ? -headRoom(p, next) : -Infinity,
   );
   const right = Math.min(
     next ? next.duration - md : nextNeighborStart(p, c) - end,
@@ -226,7 +248,7 @@ export function slideClip(p: Project, clipId: ID, newStart: number): void {
   const delta = Math.min(right, Math.max(left, q(p, newStart) - c.start));
   if (Math.abs(delta) < EPS) return;
   c.start += delta;
-  if (prev) prev.duration = c.start - prev.start;
+  if (prev) trimEnd(p, prev.id, c.start, { ignoreNeighbors: true, exact: true });
   if (next) trimStart(p, next.id, c.start + c.duration, { ignoreNeighbors: true });
 }
 
@@ -407,7 +429,10 @@ export function setSpeed(p: Project, clipId: ID, speed: number): void {
   const oldEnd = clipEnd(c);
   c.speed = speed;
   let dur = q(p, sourceLen / speed);
-  dur = Math.max(minDuration(p), Math.min(dur, maxDurationFor(p, c)));
+  // The clip keeps playing the same stretch of media, so only a forward clip can run past the end of it.
+  const media = p.assets[c.assetId]?.duration ?? 0;
+  const limit = c.reversed || media <= 0 ? Infinity : (media - c.sourceIn) / speed;
+  dur = Math.max(minDuration(p), Math.min(dur, limit));
   c.duration = dur;
   const newEnd = clipEnd(c);
   if (newEnd > oldEnd + EPS) {
@@ -485,6 +510,7 @@ export function detachAudio(p: Project, clipId: ID): ID | null {
   a.sourceIn = c.sourceIn;
   a.speed = c.speed;
   a.preservePitch = c.preservePitch;
+  if (c.reversed) a.reversed = true;
   a.volume = c.volume;
   a.pan = c.pan;
   a.fadeIn = c.fadeIn;

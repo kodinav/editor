@@ -3,6 +3,7 @@ import type { FrameDesc } from '@/core/evaluate';
 import { videoSourcesIn } from '@/core/evaluate';
 import type { FrameSources } from '@/engine/compositor';
 import { media } from '@/media/registry';
+import { ReverseReader } from '@/media/reverseReader';
 import { VideoReader } from '@/media/videoReader';
 
 /**
@@ -15,7 +16,9 @@ interface Entry {
   clipId: string;
   assetId: string;
   file: File;
-  reader: VideoReader | null;
+  /** Whether the clip plays backwards (it then needs a different kind of reader). */
+  reverse: boolean;
+  reader: VideoReader | ReverseReader | null;
   input: Input | null;
   opening: Promise<void> | null;
   error: unknown;
@@ -35,17 +38,17 @@ export class PreviewSources implements FrameSources {
 
   image = (assetId: string, time: number): ImageBitmap | null => media.image(assetId, time);
 
-  private entry(clipId: string, assetId: string): Entry | null {
+  private entry(clipId: string, assetId: string, reverse: boolean): Entry | null {
     const file = media.getFile(assetId);
     if (!file) return null;
     let e = this.entries.get(clipId);
-    if (e && (e.assetId !== assetId || e.file !== file)) {
+    if (e && (e.assetId !== assetId || e.file !== file || e.reverse !== reverse)) {
       this.close(e);
       e = undefined;
     }
     if (!e) {
-      const entry: Entry = { clipId, assetId, file, reader: null, input: null, opening: null, error: null, lastUsed: performance.now() };
-      entry.opening = VideoReader.open(file)
+      const entry: Entry = { clipId, assetId, file, reverse, reader: null, input: null, opening: null, error: null, lastUsed: performance.now() };
+      entry.opening = (reverse ? ReverseReader.open(file) : VideoReader.open(file))
         .then(({ reader, input }) => {
           if (this.entries.get(clipId) !== entry) {
             reader.dispose();
@@ -76,7 +79,7 @@ export class PreviewSources implements FrameSources {
     const wanted = videoSourcesIn(desc);
     const waits: Promise<unknown>[] = [];
     for (const w of wanted) {
-      const e = this.entry(w.key, w.assetId);
+      const e = this.entry(w.key, w.assetId, w.reverse);
       if (!e || e.error) continue;
       if (e.reader?.lastError) {
         const err = e.reader.lastError;
@@ -111,7 +114,7 @@ export class PreviewSources implements FrameSources {
     }
     for (const w of videoSourcesIn(desc)) {
       if (playing.has(w.key)) continue;
-      const e = this.entry(w.key, w.assetId);
+      const e = this.entry(w.key, w.assetId, w.reverse);
       if (!e || e.error) continue;
       const cur = e.reader?.current;
       if (e.reader && cur && Math.abs(cur.timestamp - w.time) < 0.5) continue;

@@ -66,8 +66,10 @@ export class AudioMixer {
       const s0 = audioSourceTime(seg, a);
       const s1 = audioSourceTime(seg, b);
       const pad = seg.clip.speed !== 1 && seg.clip.preservePitch ? HOP * 2 + SEARCH * 2 + 0.05 : 0.01;
+      // Effects are primed on the audio that plays just before the block: earlier media, or later when reversed.
       const warm = hasEffects(seg) ? WARMUP * seg.clip.speed : 0;
-      waits.push(pcm.ensure(Math.floor((Math.min(s0, s1) - pad - warm) * pcm.sampleRate), Math.ceil((Math.max(s0, s1) + pad) * pcm.sampleRate)));
+      const [warmLo, warmHi] = seg.clip.reversed ? [0, warm] : [warm, 0];
+      waits.push(pcm.ensure(Math.floor((Math.min(s0, s1) - pad - warmLo) * pcm.sampleRate), Math.ceil((Math.max(s0, s1) + pad + warmHi) * pcm.sampleRate)));
     }
     await Promise.all(waits);
   }
@@ -106,10 +108,12 @@ export class AudioMixer {
   /** Add a segment's audio for block samples [i0, i0 + n) into outL/outR, with per-sample gain and pan. */
   private render(seg: AudioSegment, pcm: PcmSource, t0: number, i0: number, n: number, outL: Float32Array, outR: Float32Array, gains: Float32Array, pans: Float32Array): boolean {
     const speed = seg.clip.speed;
-    if (Math.abs(speed - 1) < 1e-6 || !seg.clip.preservePitch) {
+    // Reversed audio is read backwards sample by sample (its pitch follows the speed).
+    if (Math.abs(speed - 1) < 1e-6 || !seg.clip.preservePitch || seg.clip.reversed) {
       const tStart = t0 + i0 / this.sampleRate;
-      const srcPos = audioSourceTime(seg, tStart) * pcm.sampleRate;
-      const step = (speed * pcm.sampleRate) / this.sampleRate;
+      const step = ((seg.clip.reversed ? -speed : speed) * pcm.sampleRate) / this.sampleRate;
+      // Backwards, the first sample heard is the last one of the stretch (not the one just past it).
+      const srcPos = audioSourceTime(seg, tStart) * pcm.sampleRate + (seg.clip.reversed ? step : 0);
       return pcm.read(srcPos, step, n, outL, outR, gains, pans, i0);
     }
     return this.stretch(seg, pcm, t0, i0, n, outL, outR, gains, pans);

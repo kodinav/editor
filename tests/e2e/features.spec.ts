@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { countPixels, exportVia, importFiles, loudness, meanVolume, openEditor, probe, regionColor, seek, state, waitForMediaReady, fixture } from './helpers';
+import { brightFrames, countPixels, exportVia, importFiles, loudness, meanVolume, openEditor, probe, regionColor, seek, state, waitForMediaReady, fixture } from './helpers';
 
 const out = (name: string) => {
   const dir = path.join(os.tmpdir(), 'cutline-e2e');
@@ -1334,4 +1334,55 @@ test('the preview can be zoomed and panned, and layers stay editable where they 
   await page.getByRole('menuitemcheckbox', { name: 'Fit' }).click();
   const back = (await stage.boundingBox())!;
   expect([back.x, back.y, back.width, back.height]).toEqual([fit.x, fit.y, fit.width, fit.height]);
+});
+
+test('a clip can be reversed: picture and sound run backwards together, in preview and export', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['sync.mp4']); // flash + beep together at 1, 3, 5, 7, 9 s
+  await waitForMediaReady(page);
+  const id = (await state(page)).clips[0].id;
+  // Use media 0.5 s .. 4.5 s (flashes at 1 s and 3 s), then reverse it from the Speed tab.
+  await commit(page, (d) => {
+    const c: any = Object.values(d.clips)[0];
+    c.sourceIn = 0.5;
+    c.duration = 4;
+  });
+  await page.evaluate((cid) => (window as any).__cutline.editor.getState().select([cid]), id);
+  await page.getByRole('tablist', { name: 'Clip properties' }).getByRole('tab', { name: 'Speed' }).click();
+  await page.getByRole('switch', { name: 'Play backwards' }).click();
+  expect((await state(page)).clips[0].reversed).toBe(true);
+
+  const file = await exportVia(page, out('reversed.mp4'));
+  expect(probe(file).duration).toBeGreaterThan(3.9);
+  // Forwards the flashes would start at 0.5 s and 2.5 s. Backwards they END where media 3 s and 1 s
+  // play: timeline 1.5 s and 3.5 s.
+  const flashes = brightFrames(file);
+  const ends = flashes.filter((t, i) => i === flashes.length - 1 || flashes[i + 1] - t > 0.5).map((t) => t + 1 / 30);
+  expect(ends).toHaveLength(2);
+  expect(Math.abs(ends[0] - 1.5)).toBeLessThan(0.02);
+  expect(Math.abs(ends[1] - 3.5)).toBeLessThan(0.02);
+  // The beeps end with them: sound just before each point, silence right after.
+  for (const t of [1.5, 3.5]) {
+    expect(meanVolume(file, t - 0.06, 0.05), `beep before ${t}`).toBeGreaterThan(-35);
+    expect(meanVolume(file, t + 0.03, 0.1), `quiet after ${t}`).toBeLessThan(-50);
+  }
+  // Nothing where the forward flashes would have been.
+  expect(flashes.some((t) => Math.abs(t - 0.55) < 0.04 || Math.abs(t - 2.55) < 0.04)).toBe(false);
+
+  // Preview: playing a reversed clip steps down through the media without re-decoding for every frame.
+  await page.keyboard.press('Escape');
+  await seek(page, 0.2);
+  await page.keyboard.press('Space');
+  const samples: number[] = [];
+  for (let i = 0; i < 8; i++) {
+    await page.waitForTimeout(200);
+    const ts = await page.evaluate((cid) => (window as any).__cutline.player.sources.stats().frames[cid] as number | null, id);
+    if (ts !== null) samples.push(ts);
+  }
+  await page.keyboard.press('Space');
+  const stats = await page.evaluate(() => (window as any).__cutline.player.sources.stats());
+  expect(samples.length).toBeGreaterThan(4);
+  for (let i = 1; i < samples.length; i++) expect(samples[i]).toBeLessThanOrEqual(samples[i - 1] + 1e-6);
+  expect(samples[0] - samples[samples.length - 1]).toBeGreaterThan(0.8); // really moved back through the media
+  expect(stats.restarts).toBeLessThan(12); // ~1.6 s played: a handful of windows, not one decode per frame
 });

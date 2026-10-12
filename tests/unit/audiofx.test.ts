@@ -186,3 +186,17 @@ describe('limiter', () => {
     expect(Math.abs(l[quiet + lim.latency] - x[quiet])).toBeLessThan(1e-4);
   });
 });
+
+describe('reversed audio', () => {
+  it('is the same samples in the opposite order, block by block', async () => {
+    const signal = new Float32Array(SR);
+    for (let i = 0; i < signal.length; i++) signal[i] = (i / signal.length) * 0.8 * Math.sin((2 * Math.PI * 300 * i) / SR);
+    const { p, mixer } = setup(signal, []);
+    (Object.values(p.clips)[0] as any).reversed = true;
+    const out = new Float32Array(SR);
+    for (let i = 0; i < SR; i += 4096) out.set(await render(mixer, p, i / SR, Math.min(4096, SR - i)), i);
+    let maxDiff = 0;
+    for (let i = 0; i < SR; i++) maxDiff = Math.max(maxDiff, Math.abs(out[i] - signal[SR - 1 - i]));
+    expect(maxDiff).toBeLessThan(2e-4); // 16-bit storage
+  });
+});

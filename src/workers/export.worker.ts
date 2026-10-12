@@ -28,6 +28,7 @@ import { ensureFont, registerCustomFont } from '@/engine/fonts';
 import { decodeImage } from '@/media/probe';
 import { AnimatedImage } from '@/media/animatedImage';
 import { PcmSource } from '@/media/pcm';
+import { ReverseReader } from '@/media/reverseReader';
 import { VideoReader } from '@/media/videoReader';
 import { encoderDelay } from '@/export/encoderDelay';
 import { opusCodecDelayPatch, WEBM_HEAD_BYTES } from '@/export/webmCodecDelay';
@@ -64,7 +65,7 @@ function describe(err: unknown): string {
 }
 
 class ExportSources implements FrameSources {
-  readers = new Map<string, { reader: VideoReader; input: Input }>();
+  readers = new Map<string, { reader: VideoReader | ReverseReader; input: Input }>();
   opening = new Map<string, Promise<void>>();
   images = new Map<string, ImageBitmap>();
   animations = new Map<string, AnimatedImage>();
@@ -139,7 +140,8 @@ class ExportSources implements FrameSources {
           if (!op) {
             const file = this.files[w.assetId];
             if (!file) return;
-            op = VideoReader.open(file).then((r) => void this.readers.set(w.key, r));
+            // Clips that play backwards get a reader that decodes a window of frames at a time.
+            op = (w.reverse ? ReverseReader.open(file) : VideoReader.open(file)).then((r) => void this.readers.set(w.key, r));
             this.opening.set(w.key, op);
           }
           await op;
