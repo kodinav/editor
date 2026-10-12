@@ -120,6 +120,8 @@ export const SHORTCUTS: Shortcut[] = [
 
   sc('toolSelect', 'Timeline', 'Selection tool', ['v'], () => editor().set('tool', 'select')),
   sc('toolRazor', 'Timeline', 'Blade tool', ['c', 'b'], () => editor().set('tool', 'razor')),
+  sc('toolSlip', 'Timeline', 'Slip tool (change which part of a clip’s media plays)', ['y'], () => editor().set('tool', 'slip')),
+  sc('toolSlide', 'Timeline', 'Slide tool (move a clip between its neighbours)', ['u'], () => editor().set('tool', 'slide')),
   sc('snap', 'Timeline', 'Toggle snapping', ['n'], () => {
     editor().set('snapping', !editor().snapping);
     toast({ kind: 'info', message: `Snapping ${editor().snapping ? 'on' : 'off'}`, timeout: 1200 });

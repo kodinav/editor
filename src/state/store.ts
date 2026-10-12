@@ -12,7 +12,7 @@ setAutoFreeze(import.meta.env.DEV);
 const HISTORY_LIMIT = 200;
 
 export type LeftPanel = 'media' | 'text' | 'elements' | 'transitions' | 'effects' | 'filters' | 'captions';
-export type Tool = 'select' | 'razor';
+export type Tool = 'select' | 'razor' | 'slip' | 'slide';
 export type SaveState = 'saved' | 'saving' | 'unsaved' | 'error';
 export type PreviewQuality = 'auto' | 'full' | 'half' | 'quarter';
 

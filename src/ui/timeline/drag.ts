@@ -1,6 +1,6 @@
 import { deepClone } from '@/core/clone';
 import { uid } from '@/core/ids';
-import { addTrack, maxTransitionDuration, moveClips, nextAdjacent, q, shiftTrackFrom, splitClip, trimEnd, trimStart } from '@/core/ops';
+import { addTrack, maxTransitionDuration, moveClips, nextAdjacent, prevAdjacent, q, rollEdit, shiftTrackFrom, slideClip, slipClip, splitClip, trimEnd, trimStart } from '@/core/ops';
 import { clipEnd, isVisualTrackKind, trackById } from '@/core/project';
 import type { Clip, Project, Track } from '@/core/types';
 import { isVisualClip } from '@/core/types';
@@ -128,6 +128,60 @@ function lockedTrack(p: Project, c: Clip): boolean {
   return !!trackById(p, c.trackId)?.locked;
 }
 
+/** Slip tool: drag a clip's content under it. Dragging left brings in later media, like pulling film through a gate. */
+function beginSlip(e: React.PointerEvent, ctx: TimelineCtx, c0: Clip) {
+  if (c0.type !== 'video' && c0.type !== 'audio') {
+    runDrag(e, ctx, { move: () => {}, end: () => {} });
+    return;
+  }
+  const t0 = timeAtClientX(ctx, e.clientX);
+  let began = false;
+  runDrag(e, ctx, {
+    move: (ev) => {
+      if (!began) {
+        editor().beginGesture('Slip clip');
+        began = true;
+      }
+      const dt = timeAtClientX(ctx, ev.clientX) - t0;
+      editor().updateGesture((d) => slipClip(d, c0.id, c0.sourceIn - q(d, dt) * c0.speed));
+      player.peek(c0.start);
+    },
+    end: () => {
+      player.peek(null);
+      if (began) editor().endGesture();
+    },
+    cancel: () => {
+      player.peek(null);
+      if (began) editor().cancelGesture();
+    },
+  });
+}
+
+/** Slide tool: move a clip between its neighbours, which stretch and shrink to stay touching. */
+function beginSlide(e: React.PointerEvent, ctx: TimelineCtx, c0: Clip) {
+  const t0 = timeAtClientX(ctx, e.clientX);
+  let began = false;
+  runDrag(e, ctx, {
+    move: (ev) => {
+      if (!began) {
+        editor().beginGesture('Slide clip');
+        began = true;
+      }
+      const dt = timeAtClientX(ctx, ev.clientX) - t0;
+      editor().updateGesture((d) => slideClip(d, c0.id, c0.start + dt));
+      player.peek(editor().project.clips[c0.id]?.start ?? c0.start);
+    },
+    end: () => {
+      player.peek(null);
+      if (began) editor().endGesture();
+    },
+    cancel: () => {
+      player.peek(null);
+      if (began) editor().cancelGesture();
+    },
+  });
+}
+
 /* -------------------------------- move -------------------------------- */
 
 export function beginClipDrag(e: React.PointerEvent, ctx: TimelineCtx, clipId: string) {
@@ -157,6 +211,9 @@ export function beginClipDrag(e: React.PointerEvent, ctx: TimelineCtx, clipId: s
     runDrag(e, ctx, { move: () => {}, end: () => {} });
     return;
   }
+
+  if (s.tool === 'slip') return beginSlip(e, ctx, clip);
+  if (s.tool === 'slide') return beginSlide(e, ctx, clip);
 
   const selection = editor().selection.includes(clipId) ? editor().selection : [clipId];
   const ids = selection.filter((id) => p0.clips[id] && !lockedTrack(p0, p0.clips[id]));
@@ -245,16 +302,25 @@ export function beginTrim(e: React.PointerEvent, ctx: TimelineCtx, clipId: strin
   const prevEnd = Math.max(0, ...siblings.filter((c) => clipEnd(c) <= c0.start + 1e-6).map(clipEnd));
   const nextStart = Math.min(Infinity, ...siblings.filter((c) => c.start >= clipEnd(c0) - 1e-6).map((c) => c.start));
   const ripple = s.ripple;
+  // Alt on a cut between two touching clips rolls it: both sides change, nothing else moves.
+  const neighbor = e.altKey ? (edge === 'start' ? prevAdjacent(p0, c0) : nextAdjacent(p0, c0)) : null;
+  const roll = neighbor && !lockedTrack(p0, neighbor) ? { left: edge === 'start' ? neighbor.id : clipId, right: edge === 'start' ? clipId : neighbor.id } : null;
+  const frame = 1 / p0.settings.fps;
   // Preserve the offset between the pointer and the edge being dragged.
   const grabOffset = (edge === 'start' ? c0.start : clipEnd(c0)) - timeAtClientX(ctx, e.clientX);
   let began = false;
+  // The preview shows the picture at the edit point while it is dragged.
+  const peekEdge = () => {
+    const c = editor().project.clips[roll ? roll.right : clipId];
+    if (c) player.peek(roll || edge === 'start' ? c.start : clipEnd(c) - frame);
+  };
   runDrag(
     e,
     ctx,
     {
       move: (ev) => {
         if (!began) {
-          editor().beginGesture(edge === 'start' ? 'Trim start' : 'Trim end');
+          editor().beginGesture(roll ? 'Roll edit' : edge === 'start' ? 'Trim start' : 'Trim end');
           began = true;
         }
         let t = timeAtClientX(ctx, ev.clientX) + grabOffset;
@@ -265,6 +331,11 @@ export function beginTrim(e: React.PointerEvent, ctx: TimelineCtx, clipId: strin
           snapAt = r.at;
         }
         ctx.setSnapLine(snapAt);
+        if (roll) {
+          editor().updateGesture((d) => rollEdit(d, roll.left, roll.right, t));
+          peekEdge();
+          return;
+        }
         const rippleNow = ripple !== (ev.metaKey || ev.ctrlKey);
         editor().updateGesture((d) => {
           if (edge === 'end') {
@@ -288,9 +359,16 @@ export function beginTrim(e: React.PointerEvent, ctx: TimelineCtx, clipId: strin
             }
           }
         });
+        peekEdge();
       },
-      end: () => began && editor().endGesture(),
-      cancel: () => began && editor().cancelGesture(),
+      end: () => {
+        player.peek(null);
+        if (began) editor().endGesture();
+      },
+      cancel: () => {
+        player.peek(null);
+        if (began) editor().cancelGesture();
+      },
     },
     false,
   );

@@ -35,6 +35,8 @@
   flex: 1;
   min-height: 0;
   overflow: hidden;
+  /* Pinch and two-finger pan are handled by the editor (preview zoom), not the browser. */
+  touch-action: none;
 }
 .preview-stage {
   position: absolute;

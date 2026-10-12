@@ -44,6 +44,10 @@
 .timeline[data-tool='razor'] .clip {
   cursor: crosshair;
 }
+.timeline[data-tool='slip'] .clip,
+.timeline[data-tool='slide'] .clip {
+  cursor: ew-resize;
+}
 
 /* Ruler (sticky top) */
 .tl-ruler {

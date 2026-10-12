@@ -171,6 +171,66 @@ export function trimEnd(p: Project, clipId: ID, newEnd: number, opts: TrimOption
 }
 
 /**
+ * Roll edit: move the cut between two touching clips. One gets longer as the
+ * other gets shorter, so the cut moves and nothing else on the timeline does.
+ * Limited by each clip's minimum length and by how much media each has left.
+ */
+export function rollEdit(p: Project, leftId: ID, rightId: ID, newCut: number): void {
+  const a = p.clips[leftId];
+  const b = p.clips[rightId];
+  if (!a || !b || a.trackId !== b.trackId) return;
+  const md = minDuration(p);
+  const lo = Math.max(a.start + md, b.start - maxHeadExtension(b));
+  const hi = Math.min(clipEnd(b) - md, a.start + maxDurationFor(p, a));
+  if (hi < lo - EPS) return;
+  const cut = Math.min(hi, Math.max(lo, q(p, newCut)));
+  trimStart(p, rightId, cut, { ignoreNeighbors: true });
+  a.duration = b.start - a.start;
+}
+
+/**
+ * Slip: choose which part of the media a clip plays (its source in-point),
+ * without moving it or changing its length.
+ */
+export function slipClip(p: Project, clipId: ID, sourceIn: number): void {
+  const c = p.clips[clipId];
+  if (!c || (c.type !== 'video' && c.type !== 'audio')) return;
+  const media = p.assets[c.assetId]?.duration ?? 0;
+  const span = c.type === 'video' && c.freeze ? 0 : c.duration * c.speed;
+  c.sourceIn = Math.max(0, Math.min(sourceIn, Math.max(0, media - span)));
+}
+
+/**
+ * Slide: move a clip along its track while its neighbours give way — the one
+ * it moves towards gets shorter, the one it leaves gets longer — so the clip
+ * keeps its content and length and no gap opens. Without a touching
+ * neighbour on a side, the clip can move into the free space there.
+ */
+export function slideClip(p: Project, clipId: ID, newStart: number): void {
+  const c = p.clips[clipId];
+  if (!c) return;
+  const prev = prevAdjacent(p, c);
+  const next = nextAdjacent(p, c);
+  const md = minDuration(p);
+  const end = clipEnd(c);
+  // How far the clip may travel left (negative) and right (positive).
+  const left = Math.max(
+    prev ? -(prev.duration - md) : -(c.start - prevNeighborEnd(p, c)),
+    next ? -maxHeadExtension(next) : -Infinity,
+  );
+  const right = Math.min(
+    next ? next.duration - md : nextNeighborStart(p, c) - end,
+    prev ? maxDurationFor(p, prev) - prev.duration : Infinity,
+  );
+  if (right < left) return;
+  const delta = Math.min(right, Math.max(left, q(p, newStart) - c.start));
+  if (Math.abs(delta) < EPS) return;
+  c.start += delta;
+  if (prev) prev.duration = c.start - prev.start;
+  if (next) trimStart(p, next.id, c.start + c.duration, { ignoreNeighbors: true });
+}
+
+/**
  * Remove everything on a track inside [start, end), except the given clips
  * (overwrite edit). Clips straddling the range are trimmed or split.
  */
@@ -430,6 +490,7 @@ export function detachAudio(p: Project, clipId: ID): ID | null {
   a.fadeIn = c.fadeIn;
   a.fadeOut = c.fadeOut;
   a.denoise = c.denoise;
+  if (c.audioEffects) a.audioEffects = deepClone(c.audioEffects);
   if (c.keyframes.volume) a.keyframes.volume = deepClone(c.keyframes.volume);
   if (c.keyframes.pan) a.keyframes.pan = deepClone(c.keyframes.pan);
   p.clips[a.id] = a;

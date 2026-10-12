@@ -16,6 +16,9 @@ import {
   detachAudio,
   duplicateClips,
   frameCues,
+  rollEdit,
+  slipClip,
+  slideClip,
 } from '../../src/core/ops';
 import { evaluateFrame } from '../../src/core/evaluate';
 import { upsertKeyframe, evalProp } from '../../src/core/keyframes';
@@ -408,5 +411,63 @@ describe('solo', () => {
     expect(audibleSegments(p, 0, 5)).toHaveLength(2);
     p.tracks.find((t) => t.id === a1)!.solo = true;
     expect(audibleSegments(p, 0, 5).map((s) => s.clip.id)).toEqual([music.id]);
+  });
+});
+
+describe('roll, slip and slide', () => {
+  // Three touching clips from a 10 s source: [0,3) [3,6) [6,9), each starting 2 s into its media.
+  const three = () => {
+    const { p, v1 } = setup();
+    const a = addVideo(p, v1, 0, 3, 2);
+    const b = addVideo(p, v1, 3, 3, 2);
+    const c = addVideo(p, v1, 6, 3, 2);
+    return { p, a, b, c };
+  };
+
+  it('roll moves only the cut: one clip grows, the other shrinks, the rest stays put', () => {
+    const { p, a, b, c } = three();
+    rollEdit(p, a.id, b.id, 4);
+    expect([a.start, a.duration]).toEqual([0, 4]);
+    expect([b.start, b.duration, b.sourceIn]).toEqual([4, 2, 3]); // still shows the same frame at any time
+    expect([c.start, c.duration]).toEqual([6, 3]);
+    rollEdit(p, a.id, b.id, 2);
+    expect(a.duration).toBe(2);
+    expect([b.start, b.duration, b.sourceIn]).toEqual([2, 4, 1]);
+  });
+
+  it('roll stops when a clip runs out of media or would vanish', () => {
+    const { p, a, b } = three();
+    rollEdit(p, a.id, b.id, -5); // b only has 2 s of media before its in-point
+    expect(b.start).toBe(1);
+    expect(b.sourceIn).toBe(0);
+    expect(a.duration).toBe(1);
+    rollEdit(p, a.id, b.id, 100); // b must keep at least a frame
+    expect(b.duration).toBeCloseTo(1 / 30, 6);
+    expect(a.duration + b.duration).toBeCloseTo(6, 6);
+  });
+
+  it('slip changes the content, not the place or length, and stays inside the media', () => {
+    const { p, b } = three();
+    slipClip(p, b.id, 5);
+    expect([b.start, b.duration, b.sourceIn]).toEqual([3, 3, 5]);
+    slipClip(p, b.id, 99);
+    expect(b.sourceIn).toBe(7); // 10 s of media − 3 s shown
+    slipClip(p, b.id, -4);
+    expect(b.sourceIn).toBe(0);
+  });
+
+  it('slide moves a clip between its neighbours, which give way without leaving a gap', () => {
+    const { p, a, b, c } = three();
+    slideClip(p, b.id, 4);
+    expect([a.start, a.duration]).toEqual([0, 4]);
+    expect([b.start, b.duration, b.sourceIn]).toEqual([4, 3, 2]); // the slid clip is untouched
+    expect([c.start, c.duration, c.sourceIn]).toEqual([7, 2, 3]);
+    slideClip(p, b.id, 1);
+    expect(a.duration).toBe(1);
+    expect(b.start).toBe(1);
+    expect([c.start, c.duration, c.sourceIn]).toEqual([4, 5, 0]);
+    // Further left would need media the next clip doesn't have.
+    slideClip(p, b.id, 0.5);
+    expect(b.start).toBe(1);
   });
 });

@@ -45,6 +45,8 @@ class Player {
   private displayH = 360;
   private dpr = 1;
   private lastPrerollAt = 0;
+  /** A time to show instead of the playhead while an edit is being dragged (see peek). */
+  private peekTime: number | null = null;
   private frameTimes: number[] = [];
 
   constructor() {
@@ -141,6 +143,7 @@ class Player {
 
   async play(rate = 1) {
     if (this.playing) return;
+    this.peekTime = null;
     let t = usePlayback.getState().time;
     const end = this.endTime();
     if (end <= 0) return;
@@ -181,6 +184,17 @@ class Player {
       usePlayback.getState().set({ time: t });
       if (opts.scrub) void this.audio.scrub(t);
     }
+    this.requestRender();
+  }
+
+  /**
+   * Show the frame at `t` in the preview without moving the playhead — used while trimming,
+   * so the picture at the edit point is visible. Pass null to go back to the playhead.
+   */
+  peek(t: number | null) {
+    const next = t === null || this.playing ? null : Math.max(0, t);
+    if (next === this.peekTime) return;
+    this.peekTime = next;
     this.requestRender();
   }
 
@@ -247,13 +261,13 @@ class Player {
         const c = this.compositor;
         if (!c) break;
         const p = editor().project;
-        const t = usePlayback.getState().time;
+        const t = this.peekTime ?? usePlayback.getState().time;
         const desc = evaluateFrame(p, t);
         await this.sources.prepare(desc, 'seek');
         if (this.playing) break;
         // Re-evaluate with the latest project (frames for the same time are already decoded).
         const latest = editor().project;
-        const latestT = usePlayback.getState().time;
+        const latestT = this.peekTime ?? usePlayback.getState().time;
         const finalDesc = latest === p && latestT === t ? desc : evaluateFrame(latest, t);
         await new Promise<void>((r) => requestAnimationFrame(() => r()));
         if (this.playing) break;

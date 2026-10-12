@@ -26,6 +26,7 @@ import { Gizmo } from './Gizmo';
 import { SourceMonitor } from './SourceMonitor';
 import { FormatShape } from '../common/FormatShape';
 import { usePreviewDrop } from './PreviewDrop';
+import { fitPreview, usePreviewNavigation, usePreviewView, zoomPreviewTo } from './view';
 import { applyTemplate, TEMPLATES } from '@/state/templates';
 
 export function PreviewPane({ compact }: { compact?: boolean }) {
@@ -39,6 +40,8 @@ export function PreviewPane({ compact }: { compact?: boolean }) {
   const error = usePreviewInfo((s) => s.error);
   const [box, setBox] = useState({ w: 0, h: 0, left: 0, top: 0 });
   const drop = usePreviewDrop();
+  const view = usePreviewView();
+  usePreviewNavigation(viewportRef);
 
   useEffect(() => {
     const c = canvasRef.current;
@@ -54,17 +57,25 @@ export function PreviewPane({ compact }: { compact?: boolean }) {
       const pad = compact ? 8 : 16;
       const W = vp.clientWidth - pad * 2;
       const H = vp.clientHeight - pad * 2;
-      const s = Math.max(0.01, Math.min(W / width, H / height));
-      const w = Math.floor(width * s);
-      const h = Math.floor(height * s);
-      setBox({ w, h, left: Math.floor((vp.clientWidth - w) / 2), top: Math.floor((vp.clientHeight - h) / 2) });
-      player.setDisplaySize(w, h, window.devicePixelRatio || 1);
+      const fit = Math.max(0.01, Math.min(W / width, H / height));
+      if (Math.abs(usePreviewView.getState().fit - fit) > 1e-6) usePreviewView.getState().set({ fit });
+      const s = view.zoom ?? fit;
+      const w = Math.max(1, Math.floor(width * s));
+      const h = Math.max(1, Math.floor(height * s));
+      // Keep some of the frame in sight however far it is panned.
+      const keep = 48;
+      const x = Math.max(-(vp.clientWidth + w) / 2 + keep, Math.min((vp.clientWidth + w) / 2 - keep, view.zoom === null ? 0 : view.x));
+      const y = Math.max(-(vp.clientHeight + h) / 2 + keep, Math.min((vp.clientHeight + h) / 2 - keep, view.zoom === null ? 0 : view.y));
+      if (view.zoom !== null && (x !== view.x || y !== view.y)) usePreviewView.getState().set({ x, y });
+      setBox({ w, h, left: Math.floor((vp.clientWidth - w) / 2 + x), top: Math.floor((vp.clientHeight - h) / 2 + y) });
+      // Render no more pixels than the pane can show (a zoomed-in frame is mostly off screen).
+      player.setDisplaySize(Math.min(w, vp.clientWidth * 2), Math.min(h, vp.clientHeight * 2), window.devicePixelRatio || 1);
     };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(vp);
     return () => ro.disconnect();
-  }, [width, height, compact]);
+  }, [width, height, compact, view.zoom, view.x, view.y]);
 
   return (
     <div className="preview">
@@ -124,6 +135,7 @@ function PreviewHeader() {
         {preset ? preset.id : `${width}×${height}`} · {width}×{height} · {fps} fps
       </button>
       <div className="grow" />
+      <ZoomChip />
       <button className={`icon-btn small${showSafe ? ' active' : ''}`} aria-pressed={showSafe} aria-label="Safe area guides" data-tip="Safe area guides" onClick={() => set('showSafeArea', !showSafe)}>
         <Grid3x3 size={15} />
       </button>
@@ -166,6 +178,36 @@ function PreviewHeader() {
         <Expand size={15} />
       </button>
     </div>
+  );
+}
+
+/** Preview zoom: fit, fixed percentages, and a hint for the wheel and pinch gestures. */
+function ZoomChip() {
+  const zoom = usePreviewView((s) => s.zoom);
+  const fit = usePreviewView((s) => s.fit);
+  const pct = Math.round((zoom ?? fit) * 100);
+  return (
+    <button
+      className="chip"
+      aria-haspopup="menu"
+      aria-label={`Preview zoom: ${zoom === null ? 'fit' : `${pct}%`}`}
+      data-tip="Zoom the preview (Ctrl/⌘ + scroll or pinch; scroll or middle-drag to pan)"
+      onClick={(e) =>
+        openMenuBelow(
+          e.currentTarget,
+          [
+            { label: 'Fit', checked: zoom === null, onClick: fitPreview },
+            { kind: 'separator' },
+            ...[0.25, 0.5, 1, 2, 4].map((z) => ({ label: `${z * 100}%`, checked: zoom !== null && Math.abs(zoom - z) < 1e-6, onClick: () => zoomPreviewTo(z) })),
+            { kind: 'separator' },
+            { label: 'Zoom out to see around the frame', onClick: () => zoomPreviewTo(fit * 0.6) },
+          ],
+          'right',
+        )
+      }
+    >
+      {zoom === null ? 'Fit' : `${pct}%`}
+    </button>
   );
 }
 

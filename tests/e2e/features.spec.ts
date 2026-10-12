@@ -1218,3 +1218,120 @@ test('colour tools: a .cube LUT, levels and curves all reach the export', async 
   expect(c[1]).toBeGreaterThan(35);
   expect(c[1]).toBeLessThan(110);
 });
+
+test('roll, slip and slide edits, with the edit point shown in the preview while dragging', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['landscape.mp4']);
+  await waitForMediaReady(page);
+  for (const t of [3, 6]) {
+    await seek(page, t);
+    await page.keyboard.press('s');
+  }
+  const vids = async () => (await state(page)).clips.filter((c) => c.type === 'video');
+  let [a, b, c] = await vids();
+  expect([a.start, b.start, c.start]).toEqual([0, 3, 6]);
+  const pps = await page.evaluate(() => (window as any).__cutline.editor.getState().pxPerSec);
+  const box = async (id: string) => (await page.locator(`[data-clip="${id}"]`).boundingBox())!;
+  const drag = async (x: number, y: number, dx: number, during?: () => Promise<void>) => {
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x + dx / 2, y, { steps: 4 });
+    await page.mouse.move(x + dx, y, { steps: 4 });
+    if (during) await during();
+    await page.mouse.up();
+  };
+  const peek = () => page.evaluate(() => (window as any).__cutline.player.peekTime as number | null);
+
+  // Roll: Alt-drag the cut between A and B one second later.
+  let r = await box(b.id);
+  await page.keyboard.down('Alt');
+  await drag(r.x + 2, r.y + 12, pps, async () => {
+    expect(await peek()).toBeCloseTo(4, 1); // the preview shows the frame at the cut, the playhead stays put
+  });
+  await page.keyboard.up('Alt');
+  expect(await peek()).toBeNull();
+  [a, b, c] = await vids();
+  expect(a.duration).toBeCloseTo(4, 1);
+  expect([b.start, b.duration, b.sourceIn].map((v) => Math.round(v * 10) / 10)).toEqual([4, 2, 4]);
+  expect([c.start, c.duration]).toEqual([6, 4]);
+  expect(await page.evaluate(() => (window as any).__cutline.playback.getState().time)).toBe(6);
+
+  // Slip: with the slip tool, drag B's content half a second to the left (later media), B stays where it is.
+  await page.keyboard.press('y');
+  r = await box(b.id);
+  await drag(r.x + r.width / 2, r.y + 12, -pps / 2);
+  [a, b, c] = await vids();
+  expect([b.start, b.duration].map((v) => Math.round(v * 10) / 10)).toEqual([4, 2]);
+  expect(b.sourceIn).toBeCloseTo(4.5, 1);
+
+  // Slide: move B a second to the right; A grows and C shrinks so no gap opens.
+  await page.keyboard.press('u');
+  r = await box(b.id);
+  await drag(r.x + r.width / 2, r.y + 12, pps);
+  [a, b, c] = await vids();
+  expect(a.duration).toBeCloseTo(5, 1);
+  expect([b.start, b.duration].map((v) => Math.round(v * 10) / 10)).toEqual([5, 2]);
+  expect(b.sourceIn).toBeCloseTo(4.5, 1);
+  expect([c.start, c.duration, c.sourceIn].map((v) => Math.round(v * 10) / 10)).toEqual([7, 3, 7]);
+
+  // Each drag is one undo step.
+  await page.keyboard.press('v');
+  for (let i = 0; i < 3; i++) await page.keyboard.press('ControlOrMeta+z');
+  [a, b, c] = await vids();
+  expect([a.duration, b.start, b.duration, b.sourceIn, c.start]).toEqual([3, 3, 3, 3, 6]);
+});
+
+test('the preview can be zoomed and panned, and layers stay editable where they appear', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t');
+  const id = (await state(page)).clips[0].id;
+  const stage = page.locator('.preview-stage');
+  const viewport = page.locator('.preview-viewport');
+  const fit = (await stage.boundingBox())!;
+  // Zoom from the menu.
+  await page.getByRole('button', { name: /^Preview zoom/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: '200%' }).click();
+  const settings = (await state(page)).settings;
+  let big = (await stage.boundingBox())!;
+  expect(big.width).toBeCloseTo(settings.width * 2, -1);
+  // The wheel pans when zoomed in…
+  const vp = (await viewport.boundingBox())!;
+  await page.mouse.move(vp.x + vp.width / 2, vp.y + vp.height / 2);
+  await page.mouse.wheel(120, 60);
+  const panned = (await stage.boundingBox())!;
+  expect(panned.x).toBeCloseTo(big.x - 120, 0);
+  expect(panned.y).toBeCloseTo(big.y - 60, 0);
+  // …and Ctrl + wheel zooms around the pointer: the point under it stays put.
+  const px = vp.x + vp.width * 0.3;
+  const py = vp.y + vp.height * 0.6;
+  const under = { x: (px - panned.x) / panned.width, y: (py - panned.y) / panned.height };
+  await page.mouse.move(px, py);
+  await page.keyboard.down('Control');
+  await page.mouse.wheel(0, 200);
+  await page.keyboard.up('Control');
+  const out = (await stage.boundingBox())!;
+  expect(out.width).toBeLessThan(panned.width * 0.8);
+  expect((px - out.x) / out.width).toBeCloseTo(under.x, 2);
+  expect((py - out.y) / out.height).toBeCloseTo(under.y, 2);
+
+  // Zoomed out, a layer can be dragged with the frame scaled down: it moves by project pixels, not screen pixels.
+  await page.getByRole('button', { name: /^Preview zoom/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: '25%' }).click();
+  const small = (await stage.boundingBox())!;
+  expect(small.width).toBeCloseTo(settings.width * 0.25, -1);
+  const before = (await state(page)).clips.find((c) => c.id === id).transform;
+  await page.mouse.move(small.x + small.width / 2, small.y + small.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(small.x + small.width / 2 + 20, small.y + small.height / 2 + 10, { steps: 4 });
+  await page.mouse.move(small.x + small.width / 2 + 50, small.y + small.height / 2 + 25, { steps: 4 });
+  await page.mouse.up();
+  const after = (await state(page)).clips.find((c) => c.id === id).transform;
+  expect(after.x - before.x).toBeCloseTo(200, -1); // 50 screen px at 25 %
+  expect(after.y - before.y).toBeCloseTo(100, -1);
+
+  // Fit puts it back.
+  await page.getByRole('button', { name: /^Preview zoom/ }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Fit' }).click();
+  const back = (await stage.boundingBox())!;
+  expect([back.x, back.y, back.width, back.height]).toEqual([fit.x, fit.y, fit.width, fit.height]);
+});

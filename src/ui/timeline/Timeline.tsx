@@ -28,6 +28,8 @@ import {
   ArrowUp,
   ArrowDown,
   Pencil,
+  ChevronsLeftRight,
+  ArrowLeftRight,
 } from 'lucide-react';
 import { addTrack, nextAdjacent, removeTrack, reorderTrack, setSpeed } from '@/core/ops';
 import { clipEnd, projectDuration, scaledCaptionStyle } from '@/core/project';
@@ -442,6 +444,12 @@ function Toolbar({ compact }: { compact?: boolean }) {
         </button>
         <button aria-pressed={tool === 'razor'} onClick={() => set('tool', 'razor')} aria-label="Blade tool" data-tip="Blade — click a clip to cut" data-kbd="C">
           <Scissors size={14} />
+        </button>
+        <button aria-pressed={tool === 'slip'} onClick={() => set('tool', 'slip')} aria-label="Slip tool" data-tip="Slip — drag a clip to change which part of its media plays" data-kbd="Y">
+          <ChevronsLeftRight size={14} />
+        </button>
+        <button aria-pressed={tool === 'slide'} onClick={() => set('tool', 'slide')} aria-label="Slide tool" data-tip="Slide — move a clip between its neighbours without leaving a gap" data-kbd="U">
+          <ArrowLeftRight size={14} />
         </button>
       </div>
       <button className="icon-btn small" aria-label="Split at playhead" data-tip="Split at playhead" data-kbd="S" onClick={() => A.splitAtPlayhead()}>
