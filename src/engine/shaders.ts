@@ -497,3 +497,46 @@ void main() {
   vec4 b = texture(uOther, vUV) * uAmount;
   outColor = b + texture(uTex, vUV) * (1.0 - b.a);
 }`;
+
+export const LEVELS_FS = HEAD + /* glsl */ `
+uniform float uInBlack, uInWhite, uGamma, uOutBlack, uOutWhite;
+void main() {
+  vec4 c = texture(uTex, vUV);
+  vec3 rgb = clamp((unpremul(c) - uInBlack) / max(uInWhite - uInBlack, 0.001), 0.0, 1.0);
+  rgb = pow(rgb, vec3(1.0 / uGamma));
+  rgb = mix(vec3(uOutBlack), vec3(uOutWhite), rgb);
+  outColor = vec4(rgb * c.a, c.a);
+}`;
+
+/** Tone curve through five points at 0, ¼, ½, ¾, 1 (values uY, slopes uM): a monotone cubic. */
+export const CURVES_FS = HEAD + /* glsl */ `
+uniform float uY[5];
+uniform float uM[5];
+uniform vec3 uMask;
+float curve(float x) {
+  float t = clamp(x, 0.0, 1.0) * 4.0;
+  int i = int(min(floor(t), 3.0));
+  float f = t - float(i);
+  float h = 0.25;
+  float f2 = f * f, f3 = f2 * f;
+  return (2.0 * f3 - 3.0 * f2 + 1.0) * uY[i] + (f3 - 2.0 * f2 + f) * h * uM[i] + (-2.0 * f3 + 3.0 * f2) * uY[i + 1] + (f3 - f2) * h * uM[i + 1];
+}
+void main() {
+  vec4 c = texture(uTex, vUV);
+  vec3 rgb = unpremul(c);
+  vec3 o = vec3(curve(rgb.r), curve(rgb.g), curve(rgb.b));
+  rgb = mix(rgb, clamp(o, 0.0, 1.0), uMask);
+  outColor = vec4(rgb * c.a, c.a);
+}`;
+
+export const LUT_FS = HEAD.replace('precision highp float;', 'precision highp float;\nprecision highp sampler3D;') + /* glsl */ `
+uniform sampler3D uLut;
+uniform float uLutSize, uAmount;
+void main() {
+  vec4 c = texture(uTex, vUV);
+  vec3 rgb = clamp(unpremul(c), 0.0, 1.0);
+  // Sample texel centres so the table's first and last entries map to 0 and 1 exactly.
+  vec3 o = texture(uLut, rgb * ((uLutSize - 1.0) / uLutSize) + 0.5 / uLutSize).rgb;
+  rgb = mix(rgb, clamp(o, 0.0, 1.0), uAmount);
+  outColor = vec4(rgb * c.a, c.a);
+}`;

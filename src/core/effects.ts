@@ -22,7 +22,9 @@ export type EffectParamDef =
     }
   | { key: string; label: string; kind: 'color'; default: string }
   | { key: string; label: string; kind: 'boolean'; default: boolean }
-  | { key: string; label: string; kind: 'select'; default: string; options: { value: string; label: string }[] };
+  | { key: string; label: string; kind: 'select'; default: string; options: { value: string; label: string }[] }
+  /** A colour lookup table imported into the project (its id; '' = none chosen yet). */
+  | { key: string; label: string; kind: 'lut'; default: '' };
 
 export type EffectCategory = 'Blur & Sharpen' | 'Stylize' | 'Color' | 'Distort' | 'Keying';
 
@@ -178,6 +180,51 @@ export const EFFECTS: EffectDef[] = [
     category: 'Color',
     description: 'Negative image.',
     params: [n('amount', 'Amount', 0, 100, 1, 100, '%')],
+  },
+  {
+    type: 'levels',
+    name: 'Levels',
+    category: 'Color',
+    description: 'Set the black point, white point and midtone brightness.',
+    params: [
+      n('inBlack', 'Black point', 0, 100, 0.5, 0, '%'),
+      n('inWhite', 'White point', 0, 100, 0.5, 100, '%'),
+      n('gamma', 'Midtones', 0.1, 4, 0.01, 1),
+      n('outBlack', 'Output black', 0, 100, 0.5, 0, '%'),
+      n('outWhite', 'Output white', 0, 100, 0.5, 100, '%'),
+    ],
+  },
+  {
+    type: 'curves',
+    name: 'Curves',
+    category: 'Color',
+    description: 'Shape the tone curve in five ranges, for all colours or one channel.',
+    params: [
+      {
+        key: 'channel',
+        label: 'Channel',
+        kind: 'select',
+        default: 'rgb',
+        options: [
+          { value: 'rgb', label: 'All (RGB)' },
+          { value: 'red', label: 'Red' },
+          { value: 'green', label: 'Green' },
+          { value: 'blue', label: 'Blue' },
+        ],
+      },
+      n('blacks', 'Blacks', -100, 100, 1, 0),
+      n('shadows', 'Shadows', -100, 100, 1, 0),
+      n('midtones', 'Midtones', -100, 100, 1, 0),
+      n('highlights', 'Highlights', -100, 100, 1, 0),
+      n('whites', 'Whites', -100, 100, 1, 0),
+    ],
+  },
+  {
+    type: 'lut',
+    name: 'LUT',
+    category: 'Color',
+    description: 'Apply a colour lookup table (.cube file): camera log conversions and film looks.',
+    params: [{ key: 'lut', label: 'LUT file', kind: 'lut', default: '' }, n('amount', 'Intensity', 0, 100, 1, 100, '%')],
   },
   {
     type: 'mirror',

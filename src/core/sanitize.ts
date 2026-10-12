@@ -2,6 +2,7 @@ import { EASINGS } from './easing';
 import { AUDIO_EFFECT_MAP } from './audioEffects';
 import { EFFECT_MAP, NEUTRAL_COLOR, type EffectParamDef } from './effects';
 import { uid } from './ids';
+import { lutDataLength, MAX_LUT_SIZE } from './lut';
 import { defaultAudioProps, defaultCaptionStyle, defaultTextStyle, defaultVisualProps } from './project';
 import { TRANSITION_MAP } from './transitions';
 import type {
@@ -18,6 +19,7 @@ import type {
   Effect,
   FitMode,
   KeyframeMap,
+  Lut,
   Marker,
   ShapeKind,
   TextStyle,
@@ -107,6 +109,7 @@ export function effects(v: unknown, registry: Record<string, { type: string; par
       if (p.kind === 'number') params[p.key] = num(given[p.key], p.default, p.min, p.max);
       else if (p.kind === 'color') params[p.key] = color(given[p.key], p.default);
       else if (p.kind === 'boolean') params[p.key] = bool(given[p.key], p.default);
+      else if (p.kind === 'lut') params[p.key] = typeof given[p.key] === 'string' ? (given[p.key] as string).slice(0, 64) : '';
       else params[p.key] = p.options.some((x) => x.value === given[p.key]) ? (given[p.key] as string) : p.default;
     }
     let fxId = id(o.id, 'fx');
@@ -365,6 +368,23 @@ export function sanitizeTrack(raw: Loose): Track {
   };
   if (kind === 'caption') t.captionStyle = captionStyle(raw.captionStyle);
   return t;
+}
+
+/** Imported colour LUTs: only well-formed tables of the size they claim are kept. */
+export function sanitizeLuts(v: unknown): Record<string, Lut> | undefined {
+  const out: Record<string, Lut> = {};
+  let n = 0;
+  for (const [key, raw] of Object.entries(obj(v))) {
+    if (n >= 32) break;
+    const o = obj(raw);
+    const size = o.size;
+    if (typeof size !== 'number' || !Number.isInteger(size) || size < 2 || size > MAX_LUT_SIZE) continue;
+    if (typeof o.data !== 'string' || o.data.length !== lutDataLength(size) || !/^[A-Za-z0-9+/]*={0,2}$/.test(o.data)) continue;
+    const lutId = id(key, 'lut');
+    out[lutId] = { id: lutId, name: str(o.name, 'LUT', 120), size, data: o.data };
+    n++;
+  }
+  return n ? out : undefined;
 }
 
 export function sanitizeMarkers(v: unknown): Marker[] {

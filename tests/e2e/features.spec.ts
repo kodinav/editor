@@ -1164,3 +1164,57 @@ test('right-to-left text: reveals from the right, highlights the spoken word in 
   expect(yellow(3, 0)).toBeGreaterThan(50);
   expect(yellow(3, 0.5)).toBeLessThan(5);
 });
+
+test('colour tools: a .cube LUT, levels and curves all reach the export', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['red.mp4']);
+  await waitForMediaReady(page);
+  const id = (await state(page)).clips[0].id;
+  await page.evaluate((cid) => (window as any).__cutline.editor.getState().select([cid]), id);
+  // Add a LUT effect from the inspector and give it a file that sends red to green.
+  await page.getByRole('tablist', { name: 'Clip properties' }).getByRole('tab', { name: 'Effects' }).click();
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'LUT', exact: true }).click();
+  let cube = 'TITLE "Swap"\nLUT_3D_SIZE 2\n';
+  for (let b = 0; b < 2; b++) for (let g = 0; g < 2; g++) for (let r = 0; r < 2; r++) cube += `${b} ${r} ${g}\n`;
+  await page.getByLabel('LUT file').setInputFiles({ name: 'swap.cube', mimeType: 'text/plain', buffer: Buffer.from(cube) });
+  await expect(page.getByLabel('LUT', { exact: true })).toHaveValue(/lut/);
+  let file = await exportVia(page, out('lut.mp4'));
+  expect(near(regionColor(file, 0.5, 0.4, 0.4), [0, 255, 0], 60)).toBe(true);
+
+  // A file that isn't a LUT is refused with a reason, and nothing changes.
+  await page.keyboard.press('Escape');
+  await page.getByLabel('LUT file').setInputFiles({ name: 'notes.cube', mimeType: 'text/plain', buffer: Buffer.from('LUT_1D_SIZE 4\n0 0 0\n') });
+  await expect(page.getByText('couldn’t be used as a LUT')).toBeVisible();
+
+  // The LUT is saved with the project and survives a reload.
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
+  await page.reload();
+  await page.waitForFunction(() => Object.keys((window as any).__cutline?.editor.getState().project.clips ?? {}).length === 1);
+  await waitForMediaReady(page);
+  const kept = await page.evaluate(() => {
+    const p = (window as any).__cutline.editor.getState().project;
+    const fx = (Object.values(p.clips)[0] as any).effects[0];
+    return { has: !!p.luts?.[fx.params.lut], size: p.luts?.[fx.params.lut]?.size };
+  });
+  expect(kept).toEqual({ has: true, size: 2 });
+
+  // Levels and curves: halve the output white, then pull the red channel's whites down.
+  await commit(page, (d) => {
+    const c: any = Object.values(d.clips)[0];
+    c.effects = [{ id: 'lv', type: 'levels', enabled: true, params: { inBlack: 0, inWhite: 100, gamma: 1, outBlack: 0, outWhite: 50 } }];
+  });
+  file = await exportVia(page, out('levels.mp4'));
+  expect(near(regionColor(file, 0.5, 0.4, 0.4), [128, 0, 0], 30)).toBe(true);
+  await page.keyboard.press('Escape');
+  await commit(page, (d) => {
+    const c: any = Object.values(d.clips)[0];
+    c.effects = [{ id: 'cv', type: 'curves', enabled: true, params: { channel: 'green', blacks: 100, shadows: 0, midtones: 0, highlights: 0, whites: 0 } }];
+  });
+  file = await exportVia(page, out('curves.mp4'));
+  // Lifting green's blacks adds green to pure red (0 → about a quarter), and leaves red alone.
+  const c = regionColor(file, 0.5, 0.4, 0.4);
+  expect(c[0]).toBeGreaterThan(200);
+  expect(c[1]).toBeGreaterThan(35);
+  expect(c[1]).toBeLessThan(110);
+});

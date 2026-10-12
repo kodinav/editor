@@ -1,3 +1,4 @@
+import { pruneLuts } from '@/core/lut';
 import { produce } from 'immer';
 import { uid } from '@/core/ids';
 import { createProject, projectDuration } from '@/core/project';
@@ -272,6 +273,8 @@ export async function openProject(p: Project, opts: { keepLock?: boolean } = {})
   const migrated = migrateProject(p);
   const { missing, needsConform } = await media.attachProject(migrated);
   const fixed = produce(migrated, (d) => {
+    // Colour LUTs no effect uses any more are let go when the project is next opened.
+    pruneLuts(d);
     for (const a of Object.values(d.assets)) {
       if (missing.includes(a.id)) a.status = 'missing';
       else if (a.status === 'missing' || a.status === 'processing') a.status = 'ready';

@@ -12,6 +12,7 @@ import type {
   Crop,
   FitMode,
   ImageClip,
+  Lut,
   Project,
   ShapeClip,
   TextClip,
@@ -96,6 +97,8 @@ export interface FrameDesc {
   background: string;
   /** Bottom to top. */
   layers: Layer[];
+  /** The project's colour lookup tables, for "LUT" effects. */
+  luts?: Record<string, Lut>;
 }
 
 const ACTIVE_EPS = 1e-7;
@@ -398,7 +401,7 @@ export function evaluateFrame(p: Project, t: number, opts: EvaluateOptions = {})
       break; // one clip per track at a time
     }
   }
-  return { time: t, width: p.settings.width, height: p.settings.height, background: p.settings.background, layers };
+  return { time: t, width: p.settings.width, height: p.settings.height, background: p.settings.background, layers, luts: p.luts };
 }
 
 /** All video sources needed for a frame (used to prefetch decoders). */

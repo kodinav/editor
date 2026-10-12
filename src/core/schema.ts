@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { DEFAULT_SETTINGS } from './project';
-import { clampNumber, cleanString, MAX_TIME, obj, sanitizeAsset, sanitizeClip, sanitizeMarkers, sanitizeRange, sanitizeTrack } from './sanitize';
+import { clampNumber, cleanString, MAX_TIME, obj, sanitizeAsset, sanitizeClip, sanitizeLuts, sanitizeMarkers, sanitizeRange, sanitizeTrack } from './sanitize';
 import { PROJECT_SCHEMA_VERSION, type Asset, type Clip, type Project, type Track } from './types';
 
 /**
@@ -108,6 +108,7 @@ export function migrateProject(p: Project): Project {
     const fits = clean.type === 'audio' ? kind === 'audio' : clean.type === 'caption' ? kind === 'caption' : kind === 'video';
     if (fits) clips[key] = clean;
   }
+  const luts = sanitizeLuts(raw.luts);
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     id: p.id,
@@ -121,5 +122,6 @@ export function migrateProject(p: Project): Project {
     markers: sanitizeMarkers(p.markers),
     ...sanitizeRange(p.inPoint, p.outPoint),
     masterVolume: clampNumber(p.masterVolume, 1, 0, 16),
+    ...(luts ? { luts } : {}),
   };
 }

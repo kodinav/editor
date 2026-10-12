@@ -2,7 +2,8 @@ import type { VideoSample } from 'mediabunny';
 import { EFFECT_MAP, isNeutralColor } from '@/core/effects';
 import type { AdjustmentLayer, ClipLayer, FrameDesc, ResolvedEffect, TransitionLayer } from '@/core/evaluate';
 import { layerGeometry, type LayerGeometry, type Size } from '@/core/geometry';
-import type { BlendMode, ColorAdjust, ShapeClip, TextStyle } from '@/core/types';
+import { lutValues } from '@/core/lut';
+import type { BlendMode, ColorAdjust, Lut, ShapeClip, TextStyle } from '@/core/types';
 import {
   affine,
   createQuad,
@@ -119,6 +120,46 @@ export class Compositor {
     });
   }
 
+  private luts: Record<string, Lut> | undefined;
+  private lutTex = new Map<string, { tex: WebGLTexture | null; size: number; data: string; used: number }>();
+
+  /** The 3D texture for a project LUT (uploaded once; rebuilt if its data changes), or null if unusable. */
+  private lutTexture(id: string): { tex: WebGLTexture; size: number } | null {
+    const lut = this.luts?.[id];
+    if (!lut) return null;
+    let e = this.lutTex.get(id);
+    if (e && e.data !== lut.data) {
+      if (e.tex) this.gl.deleteTexture(e.tex);
+      e = undefined;
+    }
+    if (!e) {
+      const gl = this.gl;
+      const values = lutValues(lut);
+      let tex: WebGLTexture | null = null;
+      if (values) {
+        tex = gl.createTexture()!;
+        gl.activeTexture(gl.TEXTURE0 + 2);
+        gl.bindTexture(gl.TEXTURE_3D, tex);
+        // 3D uploads from an array are refused while premultiplied unpacking is on.
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+        gl.texImage3D(gl.TEXTURE_3D, 0, gl.RGB16F, lut.size, lut.size, lut.size, 0, gl.RGB, gl.FLOAT, values);
+        gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+        if (gl.getError() !== gl.NO_ERROR) {
+          gl.deleteTexture(tex);
+          tex = null;
+        }
+        for (const p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_3D, p, gl.LINEAR);
+        for (const p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T, gl.TEXTURE_WRAP_R]) gl.texParameteri(gl.TEXTURE_3D, p, gl.CLAMP_TO_EDGE);
+        gl.bindTexture(gl.TEXTURE_3D, null);
+        gl.activeTexture(gl.TEXTURE0);
+      }
+      e = { tex, size: lut.size, data: lut.data, used: this.frameCounter };
+      this.lutTex.set(id, e);
+    }
+    e.used = this.frameCounter;
+    return e.tex ? { tex: e.tex, size: e.size } : null;
+  }
+
   private prog(name: string, src: string): Program {
     let p = this.programs.get(name);
     if (!p) {
@@ -139,6 +180,7 @@ export class Compositor {
     this.H = desc.height;
     this.scale = scale;
     this.time = desc.time;
+    this.luts = desc.luts;
     this.result = { bounds: new Map(), missing: false, fontsPending: false };
     const rw = size?.w ?? Math.max(1, Math.round(desc.width * scale));
     const rh = size?.h ?? Math.max(1, Math.round(desc.height * scale));
@@ -784,6 +826,40 @@ export class Compositor {
           p.f1('uSoftness', n('softness') / 100);
           p.i1('uInvert', fx.params.invert ? 1 : 0);
         });
+      case 'levels': {
+        const lo = n('inBlack') / 100;
+        const hi = Math.max(lo + 0.001, n('inWhite') / 100);
+        return this.simple(rt, 'levels', S.LEVELS_FS, (p) => {
+          p.f1('uInBlack', lo);
+          p.f1('uInWhite', hi);
+          p.f1('uGamma', Math.max(0.05, n('gamma')));
+          p.f1('uOutBlack', n('outBlack') / 100);
+          p.f1('uOutWhite', n('outWhite') / 100);
+        });
+      }
+      case 'curves': {
+        const { y, m } = toneCurve([n('blacks'), n('shadows'), n('midtones'), n('highlights'), n('whites')]);
+        const ch = this.str(fx, 'channel');
+        return this.simple(rt, 'curves', S.CURVES_FS, (p) => {
+          p.f1v('uY[0]', y);
+          p.f1v('uM[0]', m);
+          p.f3('uMask', ch === 'rgb' || ch === 'red' ? 1 : 0, ch === 'rgb' || ch === 'green' ? 1 : 0, ch === 'rgb' || ch === 'blue' ? 1 : 0);
+        });
+      }
+      case 'lut': {
+        const id = fx.params.lut;
+        const lut = typeof id === 'string' && id ? this.lutTexture(id) : null;
+        if (!lut) return rt; // no file chosen yet (or it was removed): leave the picture alone
+        const gl = this.gl;
+        return this.simple(rt, 'lut', S.LUT_FS, (p) => {
+          gl.activeTexture(gl.TEXTURE0 + 2);
+          gl.bindTexture(gl.TEXTURE_3D, lut.tex);
+          gl.activeTexture(gl.TEXTURE0);
+          p.i1('uLut', 2);
+          p.f1('uLutSize', lut.size);
+          p.f1('uAmount', n('amount') / 100);
+        });
+      }
       case 'mask': {
         const shortSide = Math.min(content[2] * rt.w, content[3] * rt.h);
         return this.simple(rt, 'mask', S.MASK_FS, (p) => {
@@ -828,6 +904,8 @@ export class Compositor {
     for (const e of this.videoTex.values()) gl.deleteTexture(e.tex);
     for (const e of this.imageTex.values()) gl.deleteTexture(e.tex);
     for (const e of this.rasters.values()) gl.deleteTexture(e.tex);
+    for (const e of this.lutTex.values()) if (e.tex) gl.deleteTexture(e.tex);
+    this.lutTex.clear();
     for (const p of this.programs.values()) p.dispose();
     this.pool.dispose();
     this.videoTex.clear();
@@ -840,4 +918,34 @@ export class Compositor {
   get lastTime() {
     return this.time;
   }
+}
+
+/**
+ * Five-point tone curve (at 0, ¼, ½, ¾, 1) from slider offsets in -100..100:
+ * the point values and monotone (Fritsch–Carlson) slopes, so the curve never
+ * folds back on itself however the sliders are set.
+ */
+export function toneCurve(offsets: number[]): { y: number[]; m: number[] } {
+  const y = offsets.map((o, i) => Math.min(1, Math.max(0, i / 4 + (o / 100) * 0.25)));
+  // Keep the points in order so tones never invert.
+  for (let i = 1; i < 5; i++) y[i] = Math.max(y[i], y[i - 1]);
+  const d = [0, 1, 2, 3].map((i) => (y[i + 1] - y[i]) / 0.25);
+  const m = [d[0], 0, 0, 0, d[3]];
+  for (let i = 1; i < 4; i++) m[i] = d[i - 1] * d[i] <= 0 ? 0 : (d[i - 1] + d[i]) / 2;
+  for (let i = 0; i < 4; i++) {
+    if (d[i] === 0) {
+      m[i] = 0;
+      m[i + 1] = 0;
+      continue;
+    }
+    const a = m[i] / d[i];
+    const b = m[i + 1] / d[i];
+    const s = a * a + b * b;
+    if (s > 9) {
+      const t = 3 / Math.sqrt(s);
+      m[i] = t * a * d[i];
+      m[i + 1] = t * b * d[i];
+    }
+  }
+  return { y, m };
 }

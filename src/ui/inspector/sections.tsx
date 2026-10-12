@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   AlignCenter,
   AlignLeft,
@@ -11,6 +11,7 @@ import {
   EyeOff,
   FlipHorizontal2,
   FlipVertical2,
+  FolderOpen,
   Italic,
   Plus,
   RotateCcw,
@@ -23,7 +24,7 @@ import { AUDIO_EFFECT_MAP, AUDIO_EFFECTS, AUDIO_PRESETS, createAudioEffect, pres
 import { LOUDNESS_TARGETS } from '@/engine/loudness';
 import { normalizeClipLoudness } from '@/state/loudnessTools';
 import { moveClips, setSpeed, trimEnd } from '@/core/ops';
-import type { AnimationPreset, AudibleClip, BlendMode, CaptionStyle, Clip, FitMode, ShapeClip, TextClip, TextStyle, VisualClip, AdjustmentClip } from '@/core/types';
+import type { AnimationPreset, AudibleClip, BlendMode, CaptionStyle, Clip, FitMode, Lut, ShapeClip, TextClip, TextStyle, VisualClip, AdjustmentClip } from '@/core/types';
 import { BUNDLED_FONTS, resolveWeight, SYSTEM_FONTS } from '@/engine/fonts';
 import { formatShort, formatTimecode, parseTime } from '@/core/time';
 import * as A from '@/state/actions';
@@ -33,7 +34,8 @@ import { duckUnderSpeech } from '@/state/duckingTools';
 import { setNoiseReduction, type NoiseLevel } from '@/state/denoiseTools';
 import { splitAtScenes } from '@/state/sceneTools';
 import { DEFAULT_DUCK } from '@/core/ducking';
-import { editor, useEditor } from '@/state/store';
+import { editor, toast, useEditor } from '@/state/store';
+import { LutError, makeLut, parseCube } from '@/core/lut';
 import { ColorField, NumberField, Row, Section, Segmented, SliderRow, Switch } from '../common/fields';
 import { openMenuBelow, type MenuItem } from '../common/Menu';
 import { AnimProp, clipEditor, KeyframeToggle, useLocalTime, VolumeProp } from './parts';
@@ -417,7 +419,63 @@ function EffectParam({ clip, fxId, def, value }: { clip: Clip; fxId: string; def
           </select>
         </Row>
       );
+    case 'lut':
+      return <LutParam clipId={clip.id} fxId={fxId} value={typeof value === 'string' ? value : ''} />;
   }
+}
+
+/** Choose a colour LUT for a LUT effect: one already in the project, or a .cube file from disk. */
+function LutParam({ clipId, fxId, value }: { clipId: string; fxId: string; value: string }) {
+  const luts = useEditor((s) => s.project.luts);
+  const input = useRef<HTMLInputElement>(null);
+  const use = (id: string, add?: Lut) =>
+    editor().commit('Choose LUT', (d) => {
+      if (add) d.luts = { ...(d.luts ?? {}), [add.id]: add };
+      const c = d.clips[clipId];
+      const f = c && 'effects' in c ? c.effects.find((x) => x.id === fxId) : undefined;
+      if (f) f.params.lut = id;
+    });
+  const load = async (file: File | undefined) => {
+    if (!file) return;
+    try {
+      const lut = makeLut(file.name.replace(/\.cube$/i, ''), parseCube(await file.text()));
+      use(lut.id, lut);
+    } catch (e) {
+      toast({ kind: 'error', message: `“${file.name}” couldn’t be used as a LUT.`, detail: e instanceof LutError ? e.message : 'It isn’t a readable .cube file.' });
+    }
+  };
+  const list = Object.values(luts ?? {});
+  return (
+    <>
+      {list.length > 0 && (
+        <Row label="LUT">
+          <select className="select" aria-label="LUT" value={luts?.[value] ? value : ''} onChange={(e) => use(e.target.value)}>
+            <option value="">None</option>
+            {list.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
+              </option>
+            ))}
+          </select>
+        </Row>
+      )}
+      <button className="btn small block" onClick={() => input.current?.click()}>
+        <FolderOpen size={13} /> Choose a .cube file…
+      </button>
+      <input
+        ref={input}
+        type="file"
+        accept=".cube"
+        hidden
+        aria-label="LUT file"
+        onChange={(e) => {
+          void load(e.target.files?.[0]);
+          e.target.value = '';
+        }}
+      />
+      {!luts?.[value] && <p className="subtle insp-note">Pick a 3D LUT (.cube) from your camera maker or grading app. It is stored inside this project.</p>}
+    </>
+  );
 }
 
 /* ----------------------------- Animation ----------------------------- */

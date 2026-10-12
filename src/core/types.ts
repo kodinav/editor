@@ -397,6 +397,17 @@ export interface Project {
   inPoint: number | null;
   outPoint: number | null;
   masterVolume: number;
+  /** Colour lookup tables imported into this project, used by "LUT" effects (core/lut.ts). */
+  luts?: Record<ID, Lut>;
+}
+
+export interface Lut {
+  id: ID;
+  name: string;
+  /** Points per side (2..33). */
+  size: number;
+  /** Base64 of size³ RGB triples, 16 bits each, red changing fastest. */
+  data: string;
 }
 
 export function isVisualClip(c: Clip): c is VisualClip {

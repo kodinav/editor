@@ -77,6 +77,9 @@ export class Program {
   i1(name: string, v: number) {
     this.gl.uniform1i(this.loc(name), v);
   }
+  f1v(name: string, v: number[] | Float32Array) {
+    this.gl.uniform1fv(this.loc(name), v);
+  }
   m3(name: string, m: Float32Array) {
     this.gl.uniformMatrix3fv(this.loc(name), false, m);
   }
