@@ -360,10 +360,17 @@ async function run(msg: ExportStartMessage) {
   // Fonts used by text and captions must be loaded before the first frame.
   for (const [family, buf] of Object.entries(msg.fonts)) await registerCustomFont(family, buf);
   const fontLoads: Promise<void>[] = [];
+  // The text is passed along so the script subsets it needs (Cyrillic, Greek, Arabic…) load too.
+  const cased = (text: string, upper: boolean) => (upper ? text + text.toUpperCase() : text);
   for (const c of Object.values(p.clips)) {
-    if (c.type === 'text') fontLoads.push(ensureFont(c.style.fontFamily, c.style.fontWeight, c.style.italic));
+    if (c.type === 'text') fontLoads.push(ensureFont(c.style.fontFamily, c.style.fontWeight, c.style.italic, cased(c.text, c.style.uppercase)));
   }
-  for (const t of p.tracks) if (t.captionStyle) fontLoads.push(ensureFont(t.captionStyle.fontFamily, t.captionStyle.fontWeight, t.captionStyle.italic));
+  for (const t of p.tracks) {
+    if (!t.captionStyle) continue;
+    let all = '';
+    for (const c of Object.values(p.clips)) if (c.type === 'caption' && c.trackId === t.id) all += c.text;
+    fontLoads.push(ensureFont(t.captionStyle.fontFamily, t.captionStyle.fontWeight, t.captionStyle.italic, cased(all, t.captionStyle.uppercase)));
+  }
   await Promise.all(fontLoads);
 
   const sources = new ExportSources(msg.files, Math.min(8192, Math.max(o.width, o.height) * 2));

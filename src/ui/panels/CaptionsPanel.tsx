@@ -126,7 +126,7 @@ export function CaptionsPanel() {
             <label className="subtle" htmlFor="transcript">
               Paste or type the spoken text. It will be split into captions starting at the playhead ({formatTimecode(time, fps)}).
             </label>
-            <textarea id="transcript" className="input" rows={8} value={transcript} onChange={(e) => setTranscript(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
+            <textarea dir="auto" id="transcript" className="input" rows={8} value={transcript} onChange={(e) => setTranscript(e.target.value)} onKeyDown={(e) => e.stopPropagation()} />
             <div className="row">
               <button className="btn" onClick={() => setPasting(false)}>
                 Cancel
@@ -207,7 +207,7 @@ function CaptionText({ clip }: { clip: CaptionClip }) {
   const [focused, setFocused] = useState(false);
   const shown = focused ? v : clip.text;
   return (
-    <textarea
+    <textarea dir="auto"
       className="caption-text"
       aria-label="Caption text"
       rows={Math.max(1, Math.ceil(shown.length / 22))}

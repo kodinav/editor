@@ -226,7 +226,7 @@ function CaptionClipSection({ clipId }: { clipId: string }) {
   return (
     <>
       <Section title="Caption" id="caption">
-        <textarea
+        <textarea dir="auto"
           className="input"
           rows={3}
           aria-label="Caption text"

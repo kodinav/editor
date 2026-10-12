@@ -21,6 +21,43 @@ interface Line {
   width: number;
   /** Index of the first character of this line within the (transformed) full text. */
   start: number;
+  /** The paragraph reads right to left (Arabic, Hebrew…). */
+  rtl: boolean;
+}
+
+const RTL_CHAR = /[\u0590-\u08FF\uFB1D-\uFDFF\uFE70-\uFEFC\u{10800}-\u{10FFF}\u{1E800}-\u{1EFFF}]/u;
+const LETTER = /\p{L}/u;
+/** Scripts whose letters join or reorder: these must be drawn as whole runs, never glyph by glyph. */
+const SHAPED = /[\u0590-\u08FF\u0900-\u0DFF\u0E00-\u0EFF\u1000-\u109F\u1780-\u17FF\uFB1D-\uFDFF\uFE70-\uFEFC]/;
+
+/** Base direction of a paragraph: that of its first letter (the Unicode "first strong character" rule). */
+export function isRtl(text: string): boolean {
+  for (const ch of text) {
+    if (RTL_CHAR.test(ch)) return true;
+    if (LETTER.test(ch)) return false;
+  }
+  return false;
+}
+
+const segmenter = typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+
+/** User-perceived characters: an emoji, or a letter with its accents, stays in one piece. */
+export function graphemes(s: string): string[] {
+  if (!segmenter) return [...s];
+  const out: string[] = [];
+  for (const g of segmenter.segment(s)) out.push(g.segment);
+  return out;
+}
+
+/** The first `n` UTF-16 units of `s`, shortened so it never ends inside a character. */
+function prefix(s: string, n: number): string {
+  if (n >= s.length) return s;
+  let out = '';
+  for (const g of graphemes(s)) {
+    if (out.length + g.length > n) break;
+    out += g;
+  }
+  return out;
 }
 
 let measureCtx: OffscreenCanvasRenderingContext2D | null = null;
@@ -38,16 +75,17 @@ const supportsLetterSpacing = typeof OffscreenCanvasRenderingContext2D !== 'unde
 
 function measure(ctx: OffscreenCanvasRenderingContext2D, s: string, spacingPx: number): number {
   if (!s) return 0;
-  if (supportsLetterSpacing || spacingPx === 0) return ctx.measureText(s).width;
-  return ctx.measureText(s).width + spacingPx * Math.max(0, [...s].length - 1);
+  if (supportsLetterSpacing || spacingPx === 0 || SHAPED.test(s)) return ctx.measureText(s).width;
+  return ctx.measureText(s).width + spacingPx * Math.max(0, graphemes(s).length - 1);
 }
 
 function wrap(ctx: OffscreenCanvasRenderingContext2D, text: string, maxWidth: number, spacingPx: number): Line[] {
   const lines: Line[] = [];
   let offset = 0;
   for (const para of text.split('\n')) {
+    const rtl = isRtl(para);
     if (para === '') {
-      lines.push({ text: '', width: 0, start: offset });
+      lines.push({ text: '', width: 0, start: offset, rtl });
       offset += 1;
       continue;
     }
@@ -58,25 +96,25 @@ function wrap(ctx: OffscreenCanvasRenderingContext2D, text: string, maxWidth: nu
     for (const tok of tokens) {
       const candidate = cur + tok;
       if (cur && measure(ctx, candidate.trimEnd(), spacingPx) > maxWidth && tok.trim()) {
-        lines.push({ text: cur.trimEnd(), width: measure(ctx, cur.trimEnd(), spacingPx), start: curStart });
+        lines.push({ text: cur.trimEnd(), width: measure(ctx, cur.trimEnd(), spacingPx), start: curStart, rtl });
         cur = tok;
         curStart = pos;
       } else {
         cur = candidate;
       }
       // Hard-break single words that are wider than the box.
-      while (measure(ctx, cur, spacingPx) > maxWidth && [...cur].length > 1 && !/\s/.test(cur)) {
-        const chars = [...cur];
+      while (measure(ctx, cur, spacingPx) > maxWidth && !/\s/.test(cur) && graphemes(cur).length > 1) {
+        const chars = graphemes(cur);
         let n = chars.length - 1;
         while (n > 1 && measure(ctx, chars.slice(0, n).join(''), spacingPx) > maxWidth) n--;
         const head = chars.slice(0, n).join('');
-        lines.push({ text: head, width: measure(ctx, head, spacingPx), start: curStart });
+        lines.push({ text: head, width: measure(ctx, head, spacingPx), start: curStart, rtl });
         curStart += head.length;
         cur = chars.slice(n).join('');
       }
       pos += tok.length;
     }
-    lines.push({ text: cur.trimEnd(), width: measure(ctx, cur.trimEnd(), spacingPx), start: curStart });
+    lines.push({ text: cur.trimEnd(), width: measure(ctx, cur.trimEnd(), spacingPx), start: curStart, rtl });
     offset += para.length + 1;
   }
   return lines;
@@ -111,13 +149,13 @@ export interface TextRenderOptions {
 }
 
 function drawSpaced(ctx: OffscreenCanvasRenderingContext2D, s: string, x: number, y: number, spacingPx: number, mode: 'fill' | 'stroke') {
-  if (supportsLetterSpacing || spacingPx === 0) {
+  if (supportsLetterSpacing || spacingPx === 0 || SHAPED.test(s)) {
     if (mode === 'fill') ctx.fillText(s, x, y);
     else ctx.strokeText(s, x, y);
     return;
   }
   let cx = x;
-  for (const ch of s) {
+  for (const ch of graphemes(s)) {
     if (mode === 'fill') ctx.fillText(ch, cx, y);
     else ctx.strokeText(ch, cx, y);
     cx += ctx.measureText(ch).width + spacingPx;
@@ -125,10 +163,10 @@ function drawSpaced(ctx: OffscreenCanvasRenderingContext2D, s: string, x: number
 }
 
 export function renderText(rawText: string, style: TextStyle, opts: TextRenderOptions): TextRender {
-  void ensureFont(style.fontFamily, style.fontWeight, style.italic);
-  const complete = isFontReady(style.fontFamily, style.fontWeight, style.italic);
-  const s = Math.max(0.05, opts.scale);
   const text = style.uppercase ? rawText.toUpperCase() : rawText;
+  void ensureFont(style.fontFamily, style.fontWeight, style.italic, text);
+  const complete = isFontReady(style.fontFamily, style.fontWeight, style.italic, text);
+  const s = Math.max(0.05, opts.scale);
   const size = style.fontSize * s;
   const spacing = style.letterSpacing * size;
   const ctx = mctx();
@@ -157,6 +195,7 @@ export function renderText(rawText: string, style: TextStyle, opts: TextRenderOp
   c.font = ctx.font;
   if (supportsLetterSpacing) (c as unknown as { letterSpacing: string }).letterSpacing = `${spacing}px`;
   c.textBaseline = 'alphabetic';
+  c.textAlign = 'left';
   c.lineJoin = 'round';
   c.miterLimit = 2;
 
@@ -186,10 +225,13 @@ export function renderText(rawText: string, style: TextStyle, opts: TextRenderOp
     lines.forEach((l, i) => {
       const remaining = visible - l.start;
       if (remaining <= 0) return;
-      const str = remaining >= l.text.length ? l.text : l.text.slice(0, remaining);
+      const str = prefix(l.text, remaining);
       if (!str) return;
       const y = originY + ascent + i * lineH;
-      const x = lineX(l);
+      // Positions are always the run's left edge; `direction` only sets how mixed text is ordered.
+      // A partly revealed right-to-left line grows leftwards from the line's right edge.
+      c.direction = l.rtl ? 'rtl' : 'ltr';
+      const x = l.rtl && str !== l.text ? lineX(l) + l.width - measure(c, str, spacing) : lineX(l);
       if (mode === 'stroke') {
         c.strokeStyle = color;
         c.lineWidth = stroke * 2;
@@ -202,9 +244,21 @@ export function renderText(rawText: string, style: TextStyle, opts: TextRenderOp
           const a = Math.max(hl.start, l.start) - l.start;
           const b = Math.min(hl.end, l.start + str.length) - l.start;
           if (b > a) {
-            const pre = measure(c, l.text.slice(0, a), spacing) + (a > 0 && !supportsLetterSpacing ? spacing : 0);
+            // Recolour the highlighted words by redrawing the line through a clip: letter shapes,
+            // joining and kerning stay exactly as drawn, in either direction.
+            const before = measure(c, l.text.slice(0, a), spacing);
+            const through = measure(c, l.text.slice(0, b), spacing);
+            const left = lineX(l);
+            const edge = (at: number) => (at <= 0 || at >= l.text.length || /\s/.test(l.text[at - 1]) || /\s/.test(l.text[at]) ? size * 0.08 : 0);
+            const x0 = (l.rtl ? left + l.width - through : left + before) - (l.rtl ? edge(b) : edge(a));
+            const x1 = (l.rtl ? left + l.width - before : left + through) + (l.rtl ? edge(a) : edge(b));
+            c.save();
+            c.beginPath();
+            c.rect(x0, y - ascent - lineH, x1 - x0, ascent + descent + lineH * 2);
+            c.clip();
             c.fillStyle = hl.color;
-            drawSpaced(c, l.text.slice(a, b), x + pre, y, spacing, 'fill');
+            drawSpaced(c, str, x, y, spacing, 'fill');
+            c.restore();
           }
         }
       }

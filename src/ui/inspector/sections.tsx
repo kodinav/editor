@@ -598,7 +598,7 @@ export function TextSection({ clip }: { clip: TextClip }) {
   const [draft, setDraft] = useState<string | null>(null);
   return (
     <Section title="Text" id="text">
-      <textarea
+      <textarea dir="auto"
         id="text-content-input"
         className="input"
         rows={3}

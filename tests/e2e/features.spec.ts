@@ -1063,3 +1063,104 @@ test('loudness: a clip can be normalized, and so can the whole export', async ({
   expect(m.peak).toBeLessThanOrEqual(-1);
   await expect(page.getByText(/LUFS → -14 LUFS/)).toBeVisible();
 });
+
+/** Horizontal extent (0..1 of the frame) of pixels of one colour in the live preview, within a vertical band. */
+async function inkExtent(page: Page, color: 'white' | 'yellow', y0 = 0, y1 = 1) {
+  return page.evaluate(
+    async ({ color, y0, y1 }) => {
+      const { player } = (window as any).__cutline;
+      player.requestRender();
+      await new Promise((r) => setTimeout(r, 250));
+      const src = player.compositor.canvas as HTMLCanvasElement;
+      const c = new OffscreenCanvas(src.width, src.height);
+      const ctx = c.getContext('2d')!;
+      ctx.drawImage(src, 0, 0);
+      const px = ctx.getImageData(0, 0, c.width, c.height).data;
+      let min = Infinity;
+      let max = -Infinity;
+      let count = 0;
+      for (let y = Math.floor(y0 * c.height); y < Math.floor(y1 * c.height); y++) {
+        for (let x = 0; x < c.width; x++) {
+          const i = (y * c.width + x) * 4;
+          const hit = color === 'white' ? px[i] > 200 && px[i + 1] > 200 && px[i + 2] > 200 : px[i] > 200 && px[i + 1] > 170 && px[i + 2] < 110;
+          if (!hit) continue;
+          count++;
+          if (x < min) min = x;
+          if (x > max) max = x;
+        }
+      }
+      return { min: min / c.width, max: max / c.width, count };
+    },
+    { color, y0, y1 },
+  );
+}
+
+test('right-to-left text: reveals from the right, highlights the spoken word in place, and uses the bundled Hebrew font', async ({ page }) => {
+  await openEditor(page);
+  await page.keyboard.press('t');
+  const id = (await state(page)).clips[0].id;
+  await page.evaluate((cid) => {
+    (window as any).__cutline.editor.getState().commit('rtl', (d: any) => {
+      const c = d.clips[cid];
+      c.text = 'שלום עולם';
+      c.start = 0;
+      c.duration = 5;
+      c.style.fontFamily = 'Rubik';
+      c.style.fontWeight = 700;
+      c.style.color = '#ffffff';
+      c.animIn = { preset: 'typewriter', duration: 2 };
+    });
+  }, id);
+  // The Hebrew subset of the bundled font is fetched because this text needs it (and only then).
+  await expect
+    .poll(() => page.evaluate(() => [...(document as any).fonts].some((f: FontFace) => f.family.includes('Rubik') && f.status === 'loaded' && /U\+0?590/i.test(f.unicodeRange))))
+    .toBe(true);
+  expect(await page.evaluate(() => [...(document as any).fonts].some((f: FontFace) => f.family.includes('Rubik') && /U\+0?600/i.test(f.unicodeRange)))).toBe(false); // Arabic not needed
+  await seek(page, 3);
+  const full = await inkExtent(page, 'white', 0.3, 0.7);
+  expect(full.count).toBeGreaterThan(300);
+  // Half-way through the typewriter reveal only the first word shows — and in Hebrew that is the right-hand one.
+  await seek(page, 1);
+  const half = await inkExtent(page, 'white', 0.3, 0.7);
+  expect(half.count).toBeGreaterThan(100);
+  expect(Math.abs(half.max - full.max)).toBeLessThan(0.01);
+  expect(half.min).toBeGreaterThan(full.min + (full.max - full.min) * 0.15);
+
+  // Karaoke captions: the first spoken word is the right-hand one, and it is the one that lights up.
+  await page.getByRole('tablist', { name: 'Library' }).getByRole('tab', { name: 'Captions' }).click();
+  await seek(page, 0);
+  await page.getByRole('button', { name: /Add caption at playhead/ }).click();
+  await page.evaluate(() => {
+    (window as any).__cutline.editor.getState().commit('rtl caption', (d: any) => {
+      const cap: any = Object.values(d.clips).find((c: any) => c.type === 'caption');
+      cap.text = 'שלום עולם';
+      cap.start = 0;
+      cap.duration = 4;
+      cap.words = [
+        { text: 'שלום', start: 0, end: 2 },
+        { text: 'עולם', start: 2, end: 4 },
+      ];
+      const track = d.tracks.find((t: any) => t.id === cap.trackId);
+      track.captionStyle.activeWordColor = '#ffee00';
+      track.captionStyle.fontFamily = 'Rubik';
+      const title: any = Object.values(d.clips).find((c: any) => c.type === 'text');
+      delete d.clips[title.id];
+    });
+  });
+  await seek(page, 1);
+  const all = await inkExtent(page, 'white', 0.6, 1);
+  const first = await inkExtent(page, 'yellow', 0.6, 1);
+  expect(first.count).toBeGreaterThan(30);
+  expect(first.min).toBeGreaterThan(all.max - 0.005); // the yellow word sits to the right of the white one
+  await seek(page, 3);
+  const second = await inkExtent(page, 'yellow', 0.6, 1);
+  expect(second.max).toBeLessThan(first.min);
+
+  // The export worker lays it out the same way.
+  const file = await exportVia(page, out('rtl.mp4'));
+  const yellow = (t: number, x: number) => countPixels(file, t, x, 0.6, 0.5, 0.4, (r, g, b) => r > 190 && g > 160 && b < 120);
+  expect(yellow(1, 0.5)).toBeGreaterThan(50);
+  expect(yellow(1, 0)).toBeLessThan(5);
+  expect(yellow(3, 0)).toBeGreaterThan(50);
+  expect(yellow(3, 0.5)).toBeLessThan(5);
+});

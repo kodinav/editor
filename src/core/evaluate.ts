@@ -217,12 +217,14 @@ export function buildClipLayer(p: Project, c: VisualClip, t: number): ClipLayer 
       case 'typewriter':
       case 'wordByWord':
         if (c.type === 'text') {
-          const len = c.text.length;
+          // Count on the text as drawn: upper-casing can change its length ("ß" → "SS").
+          const shownText = c.style.uppercase ? c.text.toUpperCase() : c.text;
+          const len = shownText.length;
           if (preset === 'typewriter') {
             visibleChars = Math.min(visibleChars ?? len, Math.floor(len * pr + 1e-9));
           } else {
             // Reveal whole words.
-            const words = c.text.split(/(\s+)/);
+            const words = shownText.split(/(\s+)/);
             const wordCount = words.filter((w) => w.trim()).length;
             const shown = Math.ceil(wordCount * pr - 1e-9);
             let chars = 0;
