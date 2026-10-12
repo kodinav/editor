@@ -3,6 +3,7 @@ import { CheckCircle2, Download, FolderDown, Play, RotateCcw, XCircle } from 'lu
 import { canEncodeAudio, canEncodeVideo } from 'mediabunny';
 import { projectDuration } from '@/core/project';
 import { formatDuration } from '@/core/time';
+import { LOUDNESS_TARGETS, MAX_LOUDNESS_GAIN_DB } from '@/engine/loudness';
 import { ExportError, preflight, runExport, type ExportProgress, type ExportResult } from '@/export/exporter';
 import { estimateBytes, videoBitrate, type ExportContainer, type ExportOptions, type ExportQuality } from '@/export/types';
 import { editor, useEditor } from '@/state/store';
@@ -37,6 +38,7 @@ export default function ExportDialog() {
   const [fps, setFps] = useState(PF);
   const [useRange, setUseRange] = useState(hasRange);
   const [includeAudio, setIncludeAudio] = useState(true);
+  const [loudness, setLoudness] = useState<number | null>(null);
   const [phase, setPhase] = useState<Phase>('setup');
   const [progress, setProgress] = useState<ExportProgress | null>(null);
   const [result, setResult] = useState<ExportResult | null>(null);
@@ -74,6 +76,7 @@ export default function ExportDialog() {
     includeAudio: audioOnly ? true : includeAudio,
     fileName: `${project.name.replace(/[\\/:*?"<>|]+/g, '').trim() || 'video'}.${container}`,
     hardware: 'no-preference',
+    loudness: audioOnly || includeAudio ? loudness : null,
   };
 
   // Probe codec support for honest options.
@@ -252,6 +255,19 @@ export default function ExportDialog() {
               </label>
             </div>
           )}
+          {(audioOnly || includeAudio) && (
+            <div className="field">
+              <span className="label">Loudness</span>
+              <select className="select" aria-label="Loudness" value={loudness ?? ''} onChange={(e) => setLoudness(e.target.value === '' ? null : Number(e.target.value))}>
+                <option value="">Leave as mixed</option>
+                {LOUDNESS_TARGETS.map((t) => (
+                  <option key={t.value} value={t.value}>
+                    Normalize to {t.label} — {t.tip}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           {hasRange && (
             <div className="field">
               <span className="label">Range</span>
@@ -289,10 +305,18 @@ export default function ExportDialog() {
       {phase === 'running' && progress && (
         <div className="col" style={{ gap: 12 }} aria-live="polite">
           <div className="row">
-            <strong className="grow">{progress.phase === 'preparing' ? 'Preparing media…' : progress.phase === 'finalizing' ? 'Finishing file…' : `Rendering frame ${progress.frame} of ${progress.totalFrames}`}</strong>
+            <strong className="grow">
+              {progress.phase === 'preparing'
+                ? 'Preparing media…'
+                : progress.phase === 'measuring'
+                  ? 'Measuring loudness…'
+                  : progress.phase === 'finalizing'
+                    ? 'Finishing file…'
+                    : `Rendering frame ${progress.frame} of ${progress.totalFrames}`}
+            </strong>
             <span className="mono">{pct}%</span>
           </div>
-          <div className={`progress${progress.phase !== 'rendering' ? ' indeterminate' : ''}`} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
+          <div className={`progress${progress.phase !== 'rendering' && progress.phase !== 'measuring' ? ' indeterminate' : ''}`} role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
             <div style={{ width: `${pct}%` }} />
           </div>
           <div className="row subtle" style={{ fontSize: 12 }}>
@@ -313,6 +337,15 @@ export default function ExportDialog() {
                 {result.videoCodec ? ` · ${result.videoCodec.toUpperCase()}` : ''}
                 {result.audioCodec ? ` + ${result.audioCodec.toUpperCase()}` : ''}
               </div>
+              {result.loudness && (
+                <div className="subtle" style={{ fontSize: 12 }}>
+                  {Number.isFinite(result.loudness.measured)
+                    ? `Loudness ${result.loudness.measured.toFixed(1)} LUFS → ${result.loudness.target} LUFS (${result.loudness.gainDb >= 0 ? '+' : ''}${result.loudness.gainDb.toFixed(1)} dB, peaks limited to −1 dB)${
+                        result.loudness.measured + result.loudness.gainDb < result.loudness.target - 0.05 ? `. The mix was very quiet: it was raised by the most allowed (+${MAX_LOUDNESS_GAIN_DB} dB) and is still under the target — turn the clips up.` : ''
+                      }`
+                    : 'The audio is silent, so loudness was left unchanged.'}
+                </div>
+              )}
             </div>
           </div>
           {result.savedToDisk ? (

@@ -19,6 +19,9 @@ import {
   Unlink,
 } from 'lucide-react';
 import { COLOR_PARAMS, createEffect, EFFECT_MAP, EFFECTS, FILTER_PRESETS, NEUTRAL_COLOR, type EffectParamDef } from '@/core/effects';
+import { AUDIO_EFFECT_MAP, AUDIO_EFFECTS, AUDIO_PRESETS, createAudioEffect, presetEffects } from '@/core/audioEffects';
+import { LOUDNESS_TARGETS } from '@/engine/loudness';
+import { normalizeClipLoudness } from '@/state/loudnessTools';
 import { moveClips, setSpeed, trimEnd } from '@/core/ops';
 import type { AnimationPreset, AudibleClip, BlendMode, CaptionStyle, Clip, FitMode, ShapeClip, TextClip, TextStyle, VisualClip, AdjustmentClip } from '@/core/types';
 import { BUNDLED_FONTS, resolveWeight, SYSTEM_FONTS } from '@/engine/fonts';
@@ -726,9 +729,152 @@ export function AudioSection({ clip }: { clip: AudibleClip }) {
       <SliderRow label="Fade in" value={Math.min(clip.fadeIn, maxFade)} min={0} max={maxFade} step={0.05} unit="s" defaultValue={0} onBegin={ed.begin} onEnd={ed.end} onChange={(v) => ed.change((c) => void ((c as AudibleClip).fadeIn = v))} />
       <SliderRow label="Fade out" value={Math.min(clip.fadeOut, maxFade)} min={0} max={maxFade} step={0.05} unit="s" defaultValue={0} onBegin={ed.begin} onEnd={ed.end} onChange={(v) => ed.change((c) => void ((c as AudibleClip).fadeOut = v))} />
       {!asset.audio.conformed && <p className="subtle insp-note">Preparing audio… you’ll hear it as soon as it’s ready.</p>}
+      {asset.audio.conformed && <NormalizeLoudness clipId={clip.id} />}
       {asset.audio.conformed && <DuckUnder clipId={clip.id} />}
       {asset.audio.conformed && <RemovePauses clipId={clip.id} />}
     </Section>
+  );
+}
+
+function NormalizeLoudness({ clipId }: { clipId: string }) {
+  const [target, setTarget] = useState<number>(-14);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string | null>(null);
+  return (
+    <>
+      <div className="insp-sub">Loudness</div>
+      <Row label="Target">
+        <select className="select" aria-label="Loudness target" value={target} onChange={(e) => setTarget(Number(e.target.value))}>
+          {LOUDNESS_TARGETS.map((t) => (
+            <option key={t.value} value={t.value}>
+              {t.label} — {t.tip}
+            </option>
+          ))}
+        </select>
+      </Row>
+      <button
+        className="btn small block"
+        disabled={busy}
+        onClick={async () => {
+          setBusy(true);
+          setDone(null);
+          try {
+            const r = await normalizeClipLoudness(clipId, target);
+            if (r) setDone(`Measured ${r.measured.toFixed(1)} LUFS · ${r.gainDb >= 0 ? 'raised' : 'lowered'} by ${Math.abs(r.gainDb).toFixed(1)} dB`);
+          } finally {
+            setBusy(false);
+          }
+        }}
+      >
+        {busy ? 'Measuring…' : 'Normalize loudness'}
+      </button>
+      {done && (
+        <p className="subtle insp-note" role="status">
+          {done}
+        </p>
+      )}
+    </>
+  );
+}
+
+/* ---------------------------- Audio effects ---------------------------- */
+
+export function AudioEffectsSection({ clip }: { clip: AudibleClip }) {
+  const list = clip.audioEffects ?? [];
+  const write = (label: string, recipe: (c: AudibleClip) => void) =>
+    editor().commit(label, (d) => {
+      const c = d.clips[clip.id];
+      if (c && (c.type === 'video' || c.type === 'audio')) recipe(c);
+    });
+  const add = (e: React.MouseEvent<HTMLButtonElement>) => {
+    const items: MenuItem[] = [{ kind: 'label', label: 'Effects' }];
+    for (const fx of AUDIO_EFFECTS) items.push({ label: fx.name, onClick: () => write('Add audio effect', (c) => void (c.audioEffects = [...(c.audioEffects ?? []), createAudioEffect(fx.type)])) });
+    items.push({ kind: 'label', label: 'Presets' });
+    for (const pr of AUDIO_PRESETS) items.push({ label: pr.name, onClick: () => write(`Apply ${pr.name}`, (c) => void (c.audioEffects = presetEffects(pr.id))) });
+    openMenuBelow(e.currentTarget, items, 'right');
+  };
+  return (
+    <Section
+      title={`Audio effects${list.length ? ` (${list.length})` : ''}`}
+      id="audio-effects"
+      actions={
+        <button className="btn small" onClick={add} aria-haspopup="menu" aria-label="Add audio effect">
+          <Plus size={13} /> Add
+        </button>
+      }
+    >
+      {list.length === 0 && <p className="subtle insp-note">EQ, low/high cut and compression, applied before the clip’s volume. Presets: {AUDIO_PRESETS.map((p) => p.name).join(', ')}.</p>}
+      {list.map((fx, i) => {
+        const def = AUDIO_EFFECT_MAP[fx.type];
+        if (!def) return null;
+        const move = (dir: -1 | 1) =>
+          write('Reorder audio effects', (c) => {
+            const a = c.audioEffects ?? [];
+            const j = i + dir;
+            if (j < 0 || j >= a.length) return;
+            const [x] = a.splice(i, 1);
+            a.splice(j, 0, x);
+          });
+        return (
+          <div key={fx.id} className={`fx-card${fx.enabled ? '' : ' off'}`}>
+            <div className="fx-head">
+              <button
+                className="icon-btn tiny"
+                aria-label={fx.enabled ? `Bypass ${def.name}` : `Enable ${def.name}`}
+                data-tip={fx.enabled ? 'Bypass' : 'Enable'}
+                aria-pressed={!fx.enabled}
+                onClick={() =>
+                  write('Toggle audio effect', (c) => {
+                    const f = c.audioEffects?.find((x) => x.id === fx.id);
+                    if (f) f.enabled = !f.enabled;
+                  })
+                }
+              >
+                {fx.enabled ? <Eye size={13} /> : <EyeOff size={13} />}
+              </button>
+              <strong className="grow ellipsis" title={def.description}>
+                {def.name}
+              </strong>
+              <button className="icon-btn tiny" aria-label={`Move ${def.name} up`} disabled={i === 0} onClick={() => move(-1)}>
+                <ArrowUp size={12} />
+              </button>
+              <button className="icon-btn tiny" aria-label={`Move ${def.name} down`} disabled={i === list.length - 1} onClick={() => move(1)}>
+                <ArrowDown size={12} />
+              </button>
+              <button className="icon-btn tiny" aria-label={`Remove ${def.name}`} data-tip="Remove" onClick={() => write('Remove audio effect', (c) => void (c.audioEffects = (c.audioEffects ?? []).filter((x) => x.id !== fx.id)))}>
+                <Trash2 size={12} />
+              </button>
+            </div>
+            {def.params.map((p) =>
+              p.kind === 'number' ? <AudioEffectSlider key={p.key} clipId={clip.id} fxId={fx.id} def={p} value={Number(fx.params[p.key] ?? p.default)} /> : null,
+            )}
+          </div>
+        );
+      })}
+    </Section>
+  );
+}
+
+function AudioEffectSlider({ clipId, fxId, def, value }: { clipId: string; fxId: string; def: Extract<EffectParamDef, { kind: 'number' }>; value: number }) {
+  const ed = clipEditor(clipId, `Change ${def.label.toLowerCase()}`);
+  return (
+    <SliderRow
+      label={def.label}
+      value={value}
+      min={def.min}
+      max={def.max}
+      step={def.step}
+      unit={def.unit}
+      defaultValue={def.default}
+      onBegin={ed.begin}
+      onEnd={ed.end}
+      onChange={(v) =>
+        ed.change((c) => {
+          const f = 'audioEffects' in c ? c.audioEffects?.find((x) => x.id === fxId) : undefined;
+          if (f) f.params[def.key] = v;
+        })
+      }
+    />
   );
 }
 

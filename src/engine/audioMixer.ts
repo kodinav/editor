@@ -1,6 +1,7 @@
 import { audibleSegments, audioSourceTime, clipGainAt, clipPanAt, type AudioSegment } from '@/core/audio';
 import type { Project } from '@/core/types';
 import type { PcmSource } from '@/media/pcm';
+import { chainSignature, EffectChain } from './audioDsp';
 
 /**
  * Deterministic offline/streaming mixer. Given a project and a time range it
@@ -11,6 +12,11 @@ import type { PcmSource } from '@/media/pcm';
  * stateless overlap-add whose grains are aligned by cross-correlation
  * (WSOLA-style). Every grain is a pure function of its index, so playback can
  * start anywhere and still match the export sample-for-sample.
+ *
+ * Clip audio effects (filters, EQ, compression) have memory. Their state
+ * carries over from block to block; when playback jumps, the chain is primed
+ * on the audio just before the new position, so it sounds as if it had been
+ * playing all along.
  */
 
 export interface MixSources {
@@ -24,10 +30,20 @@ const CONTROL_STEP = 64;
 const HOP = 0.03;
 const SEARCH = 0.012;
 
+/** Seconds of audio an effect chain is primed on after a jump. */
+const WARMUP = 0.3;
+
+const hasEffects = (seg: AudioSegment) => !!seg.clip.audioEffects?.some((e) => e.enabled);
+
 export class AudioMixer {
   private gains = new Float32Array(0);
   private pans = new Float32Array(0);
   private grainCache = new Map<string, number>();
+  private chains = new Map<string, { sig: string; chain: EffectChain }>();
+  private tmpL = new Float32Array(0);
+  private tmpR = new Float32Array(0);
+  private unity = new Float32Array(0);
+  private center = new Float32Array(0);
 
   constructor(
     private readonly sources: MixSources,
@@ -50,7 +66,8 @@ export class AudioMixer {
       const s0 = audioSourceTime(seg, a);
       const s1 = audioSourceTime(seg, b);
       const pad = seg.clip.speed !== 1 && seg.clip.preservePitch ? HOP * 2 + SEARCH * 2 + 0.05 : 0.01;
-      waits.push(pcm.ensure(Math.floor((Math.min(s0, s1) - pad) * pcm.sampleRate), Math.ceil((Math.max(s0, s1) + pad) * pcm.sampleRate)));
+      const warm = hasEffects(seg) ? WARMUP * seg.clip.speed : 0;
+      waits.push(pcm.ensure(Math.floor((Math.min(s0, s1) - pad - warm) * pcm.sampleRate), Math.ceil((Math.max(s0, s1) + pad) * pcm.sampleRate)));
     }
     await Promise.all(waits);
   }
@@ -79,15 +96,65 @@ export class AudioMixer {
       const n = i1 - i0;
       if (n <= 0) continue;
       this.computeEnvelope(p, seg, t0, i0, n);
-      const speed = seg.clip.speed;
-      if (Math.abs(speed - 1) < 1e-6 || !seg.clip.preservePitch) {
-        const tStart = t0 + i0 / sr;
-        const srcPos = audioSourceTime(seg, tStart) * pcm.sampleRate;
-        const step = (speed * pcm.sampleRate) / sr;
-        if (!pcm.read(srcPos, step, n, outL, outR, this.gains, this.pans, i0)) complete = false;
-      } else {
-        if (!this.stretch(seg, pcm, t0, i0, n, outL, outR)) complete = false;
+      const ok = hasEffects(seg) ? this.renderWithEffects(seg, pcm, t0, i0, n, outL, outR) : this.render(seg, pcm, t0, i0, n, outL, outR, this.gains, this.pans);
+      if (!ok) complete = false;
+    }
+    if (this.chains.size > 256) this.chains.clear();
+    return complete;
+  }
+
+  /** Add a segment's audio for block samples [i0, i0 + n) into outL/outR, with per-sample gain and pan. */
+  private render(seg: AudioSegment, pcm: PcmSource, t0: number, i0: number, n: number, outL: Float32Array, outR: Float32Array, gains: Float32Array, pans: Float32Array): boolean {
+    const speed = seg.clip.speed;
+    if (Math.abs(speed - 1) < 1e-6 || !seg.clip.preservePitch) {
+      const tStart = t0 + i0 / this.sampleRate;
+      const srcPos = audioSourceTime(seg, tStart) * pcm.sampleRate;
+      const step = (speed * pcm.sampleRate) / this.sampleRate;
+      return pcm.read(srcPos, step, n, outL, outR, gains, pans, i0);
+    }
+    return this.stretch(seg, pcm, t0, i0, n, outL, outR, gains, pans);
+  }
+
+  /** Render the clip's sound alone into the scratch buffers (unity gain, centred). */
+  private renderDry(seg: AudioSegment, pcm: PcmSource, t: number, n: number): boolean {
+    if (this.tmpL.length < n) {
+      this.tmpL = new Float32Array(n);
+      this.tmpR = new Float32Array(n);
+      this.unity = new Float32Array(n).fill(1);
+      this.center = new Float32Array(n);
+    }
+    this.tmpL.fill(0, 0, n);
+    this.tmpR.fill(0, 0, n);
+    return this.render(seg, pcm, t, 0, n, this.tmpL, this.tmpR, this.unity, this.center);
+  }
+
+  private renderWithEffects(seg: AudioSegment, pcm: PcmSource, t0: number, i0: number, n: number, outL: Float32Array, outR: Float32Array): boolean {
+    const sr = this.sampleRate;
+    const fx = seg.clip.audioEffects!;
+    const sig = chainSignature(fx);
+    const tStart = t0 + i0 / sr;
+    const first = Math.round(t0 * sr) + i0;
+    let entry = this.chains.get(seg.clip.id);
+    if (!entry || entry.sig !== sig || entry.chain.next !== first) {
+      entry = { sig, chain: new EffectChain(fx, sr) };
+      this.chains.set(seg.clip.id, entry);
+      const warm = Math.min(Math.round(WARMUP * sr), Math.max(0, Math.floor((tStart - seg.start) * sr)));
+      if (warm > 0) {
+        this.renderDry(seg, pcm, tStart - warm / sr, warm);
+        entry.chain.process(this.tmpL, this.tmpR, warm);
       }
+    }
+    const complete = this.renderDry(seg, pcm, tStart, n);
+    entry.chain.process(this.tmpL, this.tmpR, n);
+    entry.chain.next = first + n;
+    const g = this.gains;
+    const pn = this.pans;
+    const L = this.tmpL;
+    const R = this.tmpR;
+    for (let i = 0; i < n; i++) {
+      const pan = pn[i];
+      outL[i0 + i] += L[i] * g[i] * (pan > 0 ? 1 - pan : 1);
+      outR[i0 + i] += R[i] * g[i] * (pan < 0 ? 1 + pan : 1);
     }
     return complete;
   }
@@ -115,7 +182,7 @@ export class AudioMixer {
   }
 
   /** Pitch-preserving time stretch via correlation-aligned overlap-add. */
-  private stretch(seg: AudioSegment, pcm: PcmSource, t0: number, i0: number, n: number, outL: Float32Array, outR: Float32Array): boolean {
+  private stretch(seg: AudioSegment, pcm: PcmSource, t0: number, i0: number, n: number, outL: Float32Array, outR: Float32Array, gains: Float32Array, pans: Float32Array): boolean {
     const sr = this.sampleRate;
     const c = seg.clip;
     const srcRate = pcm.sampleRate;
@@ -150,8 +217,8 @@ export class AudioMixer {
         const u = (firstLocal + j / sr) / grainLen;
         const w = u <= 0 || u >= 1 ? 0 : 0.5 - 0.5 * Math.cos(2 * Math.PI * u);
         const idx = gs + j;
-        const g = this.gains[idx] * w;
-        const pan = this.pans[idx];
+        const g = gains[idx] * w;
+        const pan = pans[idx];
         const gl = pan > 0 ? 1 - pan : 1;
         const gr = pan < 0 ? 1 + pan : 1;
         outL[i0 + idx] += tmpL[j] * g * gl;

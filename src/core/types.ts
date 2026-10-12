@@ -285,6 +285,8 @@ export interface AudioProps {
   fadeIn: number;
   fadeOut: number;
   muted: boolean;
+  /** Filters, EQ and dynamics the sound runs through before volume and pan (core/audioEffects.ts). */
+  audioEffects?: Effect[];
 }
 
 export interface MediaSourceProps {

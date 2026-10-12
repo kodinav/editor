@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { countPixels, exportVia, importFiles, meanVolume, openEditor, probe, regionColor, seek, state, waitForMediaReady, fixture } from './helpers';
+import { countPixels, exportVia, importFiles, loudness, meanVolume, openEditor, probe, regionColor, seek, state, waitForMediaReady, fixture } from './helpers';
 
 const out = (name: string) => {
   const dir = path.join(os.tmpdir(), 'cutline-e2e');
@@ -1001,4 +1001,65 @@ test('a mask shows only part of a layer, and limits where an adjustment layer ap
   file = await exportVia(page, out('mask-adjust.mp4'));
   expect(near(regionColor(file, 1, 0.2, 0.5), [255, 240, 0], 60)).toBe(true); // blue inverted → yellow
   expect(near(regionColor(file, 1, 0.75, 0.5), [0, 15, 255], 60)).toBe(true); // untouched, not black
+});
+
+test('audio effects change the exported sound (added from the inspector)', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['music.mp3']);
+  await waitForMediaReady(page);
+  const id = (await state(page)).clips[0].id;
+  await page.evaluate((cid) => (window as any).__cutline.editor.getState().select([cid]), id);
+  await page.getByRole('tablist', { name: 'Clip properties' }).getByRole('tab', { name: 'Audio' }).click();
+  await page.getByRole('button', { name: 'Add audio effect' }).click();
+  await page.getByRole('menuitem', { name: 'Telephone' }).click();
+  await expect(page.getByRole('button', { name: 'Bypass Low cut' })).toBeVisible();
+  const types = await page.evaluate((cid) => (window as any).__cutline.editor.getState().project.clips[cid].audioEffects.map((e: any) => e.type), id);
+  expect(types).toEqual(['highpass', 'lowpass', 'eq']);
+  const wet = await exportVia(page, out('telephone.wav'), async () => {
+    await page.getByLabel('Format').selectOption('wav');
+  });
+  // The music is almost all bass: a telephone band (400 Hz – 3.2 kHz) leaves little of it.
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: 'Bypass Low cut' }).click();
+  await page.getByRole('button', { name: 'Bypass High cut' }).click();
+  await page.getByRole('button', { name: 'Bypass Equalizer' }).click();
+  const dry = await exportVia(page, out('telephone-bypassed.wav'), async () => {
+    await page.getByLabel('Format').selectOption('wav');
+  });
+  expect(meanVolume(dry, 1, 5)).toBeGreaterThan(-30);
+  expect(meanVolume(wet, 1, 5)).toBeLessThan(meanVolume(dry, 1, 5) - 8);
+  // The same chain built from ffmpeg's own filters lands on the same level.
+  const reference = 'highpass=f=400:p=2:w=0.5412:t=q,highpass=f=400:p=2:w=1.3066:t=q,lowpass=f=3200:p=2:w=0.5412:t=q,lowpass=f=3200:p=2:w=1.3066:t=q,equalizer=f=1500:t=q:w=0.9:g=6';
+  expect(Math.abs(meanVolume(wet, 1, 5) - meanVolume(dry, 1, 5, reference))).toBeLessThan(1);
+});
+
+test('loudness: a clip can be normalized, and so can the whole export', async ({ page }) => {
+  await openEditor(page);
+  await importFiles(page, ['speech.wav']);
+  await waitForMediaReady(page);
+  const id = (await state(page)).clips[0].id;
+  await page.evaluate((cid) => (window as any).__cutline.editor.getState().select([cid]), id);
+  await page.getByRole('tablist', { name: 'Clip properties' }).getByRole('tab', { name: 'Audio' }).click();
+  await page.getByLabel('Loudness target').selectOption('-23');
+  await page.getByRole('button', { name: 'Normalize loudness' }).click();
+  await expect(page.getByText(/Measured -?[\d.]+ LUFS/)).toBeVisible();
+  let file = await exportVia(page, out('clip-normalized.wav'), async () => {
+    await page.getByLabel('Format').selectOption('wav');
+  });
+  expect(Math.abs(loudness(file).lufs - -23)).toBeLessThan(0.7);
+
+  // Now make it far too quiet and let the export bring the whole mix to -14 LUFS without clipping.
+  await page.keyboard.press('Escape');
+  await commit(page, (d) => {
+    const c: any = Object.values(d.clips)[0];
+    c.volume *= 0.3;
+  });
+  file = await exportVia(page, out('export-normalized.wav'), async () => {
+    await page.getByLabel('Format').selectOption('wav');
+    await page.getByLabel('Loudness', { exact: true }).selectOption('-14');
+  });
+  const m = loudness(file);
+  expect(Math.abs(m.lufs - -14)).toBeLessThan(1);
+  expect(m.peak).toBeLessThanOrEqual(-1);
+  await expect(page.getByText(/LUFS → -14 LUFS/)).toBeVisible();
 });

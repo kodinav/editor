@@ -13,6 +13,7 @@ import { ColorField, NumberField, Row, Section, SliderRow, Switch } from '../com
 import {
   AnimationSection,
   AudioSection,
+  AudioEffectsSection,
   CaptionStyleSection,
   ColorSection,
   CropSection,
@@ -210,6 +211,7 @@ function ClipInspector({ clip }: { clip: Clip }) {
         )}
         {active === 'effects' && (isVisualClip(clip) || clip.type === 'adjustment') && <EffectsSection clip={clip} />}
         {active === 'audio' && (clip.type === 'video' || clip.type === 'audio') && <AudioSection clip={clip} />}
+        {active === 'audio' && (clip.type === 'video' || clip.type === 'audio') && asset?.audio && <AudioEffectsSection clip={clip} />}
         {active === 'speed' && (clip.type === 'video' || clip.type === 'audio') && <SpeedSection clip={clip} />}
       </div>
     </>

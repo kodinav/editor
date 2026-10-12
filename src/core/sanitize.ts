@@ -1,5 +1,6 @@
 import { EASINGS } from './easing';
-import { EFFECT_MAP, NEUTRAL_COLOR } from './effects';
+import { AUDIO_EFFECT_MAP } from './audioEffects';
+import { EFFECT_MAP, NEUTRAL_COLOR, type EffectParamDef } from './effects';
 import { uid } from './ids';
 import { defaultAudioProps, defaultCaptionStyle, defaultTextStyle, defaultVisualProps } from './project';
 import { TRANSITION_MAP } from './transitions';
@@ -93,12 +94,12 @@ export function colorAdjust(v: unknown): ColorAdjust {
   return out;
 }
 
-export function effects(v: unknown): Effect[] {
+export function effects(v: unknown, registry: Record<string, { type: string; params: EffectParamDef[] }> = EFFECT_MAP): Effect[] {
   const out: Effect[] = [];
   const seen = new Set<string>();
   for (const e of arr(v).slice(0, 64)) {
     const o = obj(e);
-    const def = typeof o.type === 'string' ? EFFECT_MAP[o.type] : undefined;
+    const def = typeof o.type === 'string' && Object.hasOwn(registry, o.type) ? registry[o.type] : undefined;
     if (!def) continue;
     const given = obj(o.params);
     const params: Effect['params'] = {};
@@ -212,6 +213,7 @@ function audio(o: Loose, duration: number): AudioProps {
     fadeIn: num(o.fadeIn, 0, 0, duration),
     fadeOut: num(o.fadeOut, 0, 0, duration),
     muted: bool(o.muted, d.muted),
+    ...(Array.isArray(o.audioEffects) && o.audioEffects.length ? { audioEffects: effects(o.audioEffects, AUDIO_EFFECT_MAP) } : {}),
   };
 }
 

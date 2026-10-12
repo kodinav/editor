@@ -21,6 +21,8 @@ import {
 import { evaluateFrame, imageAssetsIn, videoSourcesIn } from '@/core/evaluate';
 import type { Project } from '@/core/types';
 import { AudioMixer } from '@/engine/audioMixer';
+import { Limiter } from '@/engine/audioDsp';
+import { LOUDNESS_CEILING, loudnessGainDb, measureMix } from '@/engine/loudness';
 import { Compositor, type FrameSources } from '@/engine/compositor';
 import { ensureFont, registerCustomFont } from '@/engine/fonts';
 import { decodeImage } from '@/media/probe';
@@ -29,7 +31,7 @@ import { PcmSource } from '@/media/pcm';
 import { VideoReader } from '@/media/videoReader';
 import { encoderDelay } from '@/export/encoderDelay';
 import { opusCodecDelayPatch, WEBM_HEAD_BYTES } from '@/export/webmCodecDelay';
-import { audioBitrate, videoBitrate, type ExportStartMessage, type ExportWorkerMessage } from '@/export/types';
+import { audioBitrate, videoBitrate, type ExportStartMessage, type ExportWorkerMessage, type LoudnessReport } from '@/export/types';
 
 /**
  * Offline renderer. Runs the same evaluate → composite → mix pipeline as the
@@ -426,15 +428,60 @@ async function run(msg: ExportStartMessage) {
   const L = new Float32Array(AUDIO_BLOCK);
   const R = new Float32Array(AUDIO_BLOCK);
   const planar = new Float32Array(AUDIO_BLOCK * 2);
+
+  // Loudness normalization: measure the finished mix first, then apply one gain for the whole
+  // export and a look-ahead limiter so raising it never clips. The limiter delays its output,
+  // so the mix runs `lead` samples ahead of what is written.
+  let loudness: LoudnessReport | undefined;
+  let gain = 1;
+  let limiter: Limiter | null = null;
+  let lead = 0;
+  if (audioSource && typeof o.loudness === 'number') {
+    let lastReport = 0;
+    const measured = await measureMix(new AudioMixer({ getPcm: (id, variant) => pcm.get(variant ? `${id}:${variant}` : id) }, SR), p, o.start, o.end, {
+      cancelled: () => cancelled,
+      onProgress: (f) => {
+        const now = performance.now();
+        if (now - lastReport < 250) return;
+        lastReport = now;
+        scope.postMessage({ type: 'progress', frame: Math.round(f * totalFrames), totalFrames, fps: 0, elapsed: (now - t0) / 1000, phase: 'measuring' });
+      },
+    });
+    const gainDb = loudnessGainDb(measured.lufs, o.loudness);
+    loudness = { measured: measured.lufs, target: o.loudness, gainDb };
+    gain = Math.pow(10, gainDb / 20);
+    limiter = new Limiter(LOUDNESS_CEILING, SR);
+    lead = limiter.latency;
+    // Prime the limiter with the first `lead` samples (its output for them is the initial silence).
+    await mixer.prepare(p, o.start, lead);
+    mixer.mix(p, o.start, lead, L, R);
+    for (let i = 0; i < lead; i++) {
+      L[i] *= gain;
+      R[i] *= gain;
+    }
+    limiter.process(L, R, lead);
+  }
+
   const writeAudioUntil = async (tRel: number) => {
     if (!audioSource) return;
     const targetFrames = Math.min(totalAudioFrames, Math.ceil(tRel * SR));
     while (audioWritten < targetFrames) {
       if (cancelled) throw new Error('cancelled');
       const n = Math.min(AUDIO_BLOCK, totalAudioFrames - audioWritten);
-      const tAbs = o.start + audioWritten / SR;
+      const tAbs = o.start + (audioWritten + lead) / SR;
       await mixer.prepare(p, tAbs, n);
       mixer.mix(p, tAbs, n, L, R);
+      // Past the end of the range the mix is cut, as it would be without the limiter.
+      const live = Math.max(0, Math.min(n, totalAudioFrames - audioWritten - lead));
+      L.fill(0, live, n);
+      R.fill(0, live, n);
+      if (limiter) {
+        for (let i = 0; i < n; i++) {
+          L[i] *= gain;
+          R[i] *= gain;
+        }
+        limiter.process(L, R, n);
+      }
       planar.set(L.subarray(0, n), 0);
       planar.set(R.subarray(0, n), n);
       const sample = new AudioSample({
@@ -493,11 +540,11 @@ async function run(msg: ExportStartMessage) {
     const mimeType = await output.getMimeType().catch(() => format.mimeType);
     if (writable) {
       const bytes = await writable.close();
-      scope.postMessage({ type: 'done', bytes, mimeType, elapsed: (performance.now() - t0) / 1000, videoCodec: vCodec, audioCodec: aCodec });
+      scope.postMessage({ type: 'done', bytes, mimeType, elapsed: (performance.now() - t0) / 1000, videoCodec: vCodec, audioCodec: aCodec, loudness });
     } else {
       const buffer = memoryTarget!.buffer!;
       (scope as unknown as { postMessage(m: ExportWorkerMessage, t: Transferable[]): void }).postMessage(
-        { type: 'done', bytes: buffer.byteLength, mimeType, elapsed: (performance.now() - t0) / 1000, videoCodec: vCodec, audioCodec: aCodec, buffer },
+        { type: 'done', bytes: buffer.byteLength, mimeType, elapsed: (performance.now() - t0) / 1000, videoCodec: vCodec, audioCodec: aCodec, buffer, loudness },
         [buffer],
       );
     }

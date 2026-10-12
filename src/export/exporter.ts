@@ -3,7 +3,7 @@ import { uid } from '@/core/ids';
 import type { Project } from '@/core/types';
 import { media } from '@/media/registry';
 import { deleteFile, DIRS, getFile } from '@/storage/opfs';
-import type { ExportOptions, ExportStartMessage, ExportWorkerMessage } from './types';
+import type { ExportOptions, ExportStartMessage, ExportWorkerMessage, LoudnessReport } from './types';
 
 /**
  * Main-thread side of export: gathers media handles, starts the export
@@ -11,7 +11,7 @@ import type { ExportOptions, ExportStartMessage, ExportWorkerMessage } from './t
  */
 
 export interface ExportProgress {
-  phase: 'preparing' | 'rendering' | 'finalizing';
+  phase: 'preparing' | 'measuring' | 'rendering' | 'finalizing';
   frame: number;
   totalFrames: number;
   fps: number;
@@ -26,6 +26,8 @@ export interface ExportResult {
   elapsed: number;
   videoCodec: string | null;
   audioCodec: string | null;
+  /** Set when the export normalized its loudness. */
+  loudness?: LoudnessReport;
   /** Delete the rendered file from browser storage once it has been downloaded. */
   discard?: () => void;
 }
@@ -99,6 +101,7 @@ export function runExport(
             elapsed: m.elapsed,
             videoCodec: m.videoCodec,
             audioCodec: m.audioCodec,
+            loudness: m.loudness,
             // A download in progress still reads the file: give it time before deleting.
             discard: stored ? () => void setTimeout(() => void deleteFile(DIRS.exports, opfsName).catch(() => {}), 120_000) : undefined,
           });

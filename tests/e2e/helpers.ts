@@ -41,8 +41,8 @@ export function regionColor(file: string, t: number, rx = 0.1, ry = 0.1, rw = 0.
 }
 
 /** Mean volume (dB) of a time range. */
-export function meanVolume(file: string, start: number, dur: number): number {
-  const out = String(spawnSync(FF, ['-hide_banner', '-ss', String(start), '-t', String(dur), '-i', file, '-af', 'volumedetect', '-f', 'null', '-']).stderr);
+export function meanVolume(file: string, start: number, dur: number, filters = ''): number {
+  const out = String(spawnSync(FF, ['-hide_banner', '-ss', String(start), '-t', String(dur), '-i', file, '-af', `${filters ? filters + ',' : ''}volumedetect`, '-f', 'null', '-']).stderr);
   const m = /mean_volume: (-?[\d.]+|-inf) dB/.exec(out);
   return m ? (m[1] === '-inf' ? -Infinity : parseFloat(m[1])) : NaN;
 }
@@ -184,4 +184,14 @@ export function audioOnsets(file: string, thr = 0.2, gap = 0.5): number[] {
 export function audioOnsetsByTimestamp(file: string, gap = 0.3): number[] {
   const out = String(spawnSync(FF, ['-hide_banner', '-i', file, '-map', '0:a:0', '-af', `silencedetect=n=-16dB:d=${gap}`, '-f', 'null', '-']).stderr);
   return [...out.matchAll(/silence_end: (-?[\d.]+)/g)].map((m) => parseFloat(m[1]));
+}
+
+/** Integrated loudness (LUFS) and sample peak (dBFS) measured by ffmpeg's EBU R128 meter. */
+export function loudness(file: string): { lufs: number; peak: number } {
+  const out = String(spawnSync(FF, ['-hide_banner', '-nostats', '-i', file, '-af', 'ebur128=peak=sample', '-f', 'null', '-']).stderr);
+  const summary = out.slice(out.lastIndexOf('Summary:'));
+  const i = /I:\s+(-?[\d.]+|-inf) LUFS/.exec(summary);
+  const pk = /Peak:\s+(-?[\d.]+|-inf) dBFS/.exec(summary);
+  const val = (m: RegExpExecArray | null) => (m ? (m[1] === '-inf' ? -Infinity : parseFloat(m[1])) : NaN);
+  return { lufs: val(i), peak: val(pk) };
 }

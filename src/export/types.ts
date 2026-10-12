@@ -17,6 +17,8 @@ export interface ExportOptions {
   fileName: string;
   /** Prefer hardware encoders (faster) or software (more compatible). */
   hardware: 'no-preference' | 'prefer-hardware' | 'prefer-software';
+  /** Normalize the whole mix to this integrated loudness (LUFS), with a peak limiter. Null leaves levels as mixed. */
+  loudness?: number | null;
 }
 
 export interface ExportStartMessage {
@@ -31,8 +33,8 @@ export interface ExportStartMessage {
 }
 
 export type ExportWorkerMessage =
-  | { type: 'progress'; frame: number; totalFrames: number; fps: number; elapsed: number; phase: 'preparing' | 'rendering' | 'finalizing' }
-  | { type: 'done'; bytes: number; mimeType: string; elapsed: number; videoCodec: string | null; audioCodec: string | null; buffer?: ArrayBuffer }
+  | { type: 'progress'; frame: number; totalFrames: number; fps: number; elapsed: number; phase: 'preparing' | 'measuring' | 'rendering' | 'finalizing' }
+  | { type: 'done'; bytes: number; mimeType: string; elapsed: number; videoCodec: string | null; audioCodec: string | null; buffer?: ArrayBuffer; loudness?: LoudnessReport }
   | { type: 'error'; message: string }
   | { type: 'cancelled' };
 
@@ -54,4 +56,12 @@ export function estimateBytes(o: ExportOptions, codec: string): number {
   const audio = o.includeAudio ? (o.container === 'wav' ? 48000 * 2 * 2 * 8 : audioBitrate(o.quality)) : 0;
   const video = o.container === 'wav' || o.container === 'm4a' ? 0 : videoBitrate(o.width, o.height, o.fps, o.quality, codec);
   return ((video + audio) * dur) / 8;
+}
+
+/** What loudness normalization did to an export. */
+export interface LoudnessReport {
+  /** Integrated loudness of the mix before normalizing (LUFS; -Infinity if silent). */
+  measured: number;
+  target: number;
+  gainDb: number;
 }

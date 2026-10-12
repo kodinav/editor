@@ -135,6 +135,11 @@ export function pasteAttributes() {
       const dur = c.duration as number;
       for (const key of ['fadeIn', 'fadeOut']) if (key in src && key in c) c[key] = Math.min(dur, src[key] as number);
       if (c.type === 'text' && src.type === 'text') c.style = deepClone(src.style);
+      if ('volume' in src && 'volume' in c) {
+        const list = (src.audioEffects as { id: string }[] | undefined) ?? [];
+        if (list.length) c.audioEffects = list.map((e) => ({ ...deepClone(e), id: uid('afx') }));
+        else delete c.audioEffects;
+      }
       // Effects get new ids; their keyframes follow them.
       const ids2 = new Map<string, string>();
       if (Array.isArray(src.effects) && Array.isArray(c.effects)) {
