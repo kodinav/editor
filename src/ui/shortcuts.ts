@@ -232,7 +232,7 @@ const isCharacterKey = (combo: string) => !/^(mod|alt|ctrl)\+/.test(combo) && /^
 
 export function installShortcuts(): () => void {
   const onKey = (e: KeyboardEvent) => {
-    if (e.defaultPrevented) return;
+    if (e.defaultPrevented || editor().booting) return;
     if ((e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) && !document.querySelector('.menu')) {
       if (openContextMenuFromKeyboard()) e.preventDefault();
       return;

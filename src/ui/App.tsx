@@ -30,6 +30,7 @@ export function App() {
   const layout: Layout = isPhone ? 'phone' : isTablet ? 'tablet' : 'desktop';
   const dialog = useEditor((s) => s.dialog);
   const readOnly = useEditor((s) => s.readOnlyReason);
+  const booting = useEditor((s) => s.booting);
   const [dragging, setDragging] = useState(false);
 
   useEffect(() => installShortcuts(), []);
@@ -74,7 +75,7 @@ export function App() {
   }, []);
 
   return (
-    <div className="app" data-layout={layout}>
+    <div className="app" data-layout={layout} inert={booting} aria-busy={booting}>
       <a href="#timeline" className="sr-only">
         Skip to timeline
       </a>

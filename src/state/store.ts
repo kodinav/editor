@@ -72,6 +72,11 @@ export interface EditorState {
   loop: boolean;
   /** True when the open project failed to acquire the cross-tab lock. */
   readOnlyReason: string | null;
+  /**
+   * True while the last project is being restored at start-up. Input is held off until then,
+   * so nothing done in the first instant is replaced when the project arrives.
+   */
+  booting: boolean;
 
   /* actions */
   loadProject(p: Project): void;
@@ -163,6 +168,7 @@ export const useEditor = create<EditorState>()((set, get) => ({
   sourcePreview: null,
   loop: false,
   readOnlyReason: null,
+  booting: false,
 
   loadProject(p) {
     coalescing = null;

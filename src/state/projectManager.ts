@@ -434,6 +434,26 @@ export async function collectGarbage(): Promise<void> {
 
 export async function bootstrap(): Promise<void> {
   startAutosave();
+  useEditor.setState({ booting: true });
+  try {
+    await restoreOrCreate();
+  } finally {
+    useEditor.setState({ booting: false });
+  }
+  if (!(await opfsUsable())) {
+    toast({
+      kind: 'warning',
+      message: 'Media can’t be stored in this browser window.',
+      detail: 'This is common in private browsing. You can edit and export normally, but imported files will need to be re-linked after the window is closed.',
+      timeout: 0,
+    });
+  }
+  void requestPersistence();
+  setTimeout(() => void collectGarbage(), 5000);
+}
+
+/** Open the project that was last worked on (or the newest one), or start a new one. */
+async function restoreOrCreate(): Promise<void> {
   let opened = false;
   try {
     const lastId = await kvGet<string>(LAST_PROJECT_KEY);
@@ -456,14 +476,4 @@ export async function bootstrap(): Promise<void> {
     toast({ kind: 'error', message: 'Your last project could not be restored.', detail: String((e as Error).message ?? e) });
   }
   if (!opened) await newProject();
-  if (!(await opfsUsable())) {
-    toast({
-      kind: 'warning',
-      message: 'Media can’t be stored in this browser window.',
-      detail: 'This is common in private browsing. You can edit and export normally, but imported files will need to be re-linked after the window is closed.',
-      timeout: 0,
-    });
-  }
-  void requestPersistence();
-  setTimeout(() => void collectGarbage(), 5000);
 }

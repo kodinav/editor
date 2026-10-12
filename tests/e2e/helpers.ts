@@ -63,7 +63,8 @@ export function dominantFrequency(file: string, start: number, dur: number): num
 
 export async function openEditor(page: Page) {
   await page.goto('/?debug');
-  await page.waitForFunction(() => !!(window as unknown as { __cutline?: unknown }).__cutline);
+  // Ready once the start-up project is open (input is held off until then).
+  await page.waitForFunction(() => (window as any).__cutline?.editor.getState().booting === false);
 }
 
 export async function importFiles(page: Page, names: string[]) {

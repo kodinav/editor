@@ -1187,18 +1187,6 @@ test('colour tools: a .cube LUT, levels and curves all reach the export', async 
   await page.getByLabel('LUT file').setInputFiles({ name: 'notes.cube', mimeType: 'text/plain', buffer: Buffer.from('LUT_1D_SIZE 4\n0 0 0\n') });
   await expect(page.getByText('couldn’t be used as a LUT')).toBeVisible();
 
-  // The LUT is saved with the project and survives a reload.
-  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
-  await page.reload();
-  await page.waitForFunction(() => Object.keys((window as any).__cutline?.editor.getState().project.clips ?? {}).length === 1);
-  await waitForMediaReady(page);
-  const kept = await page.evaluate(() => {
-    const p = (window as any).__cutline.editor.getState().project;
-    const fx = (Object.values(p.clips)[0] as any).effects[0];
-    return { has: !!p.luts?.[fx.params.lut], size: p.luts?.[fx.params.lut]?.size };
-  });
-  expect(kept).toEqual({ has: true, size: 2 });
-
   // Levels and curves: halve the output white, then pull the red channel's whites down.
   await commit(page, (d) => {
     const c: any = Object.values(d.clips)[0];
@@ -1217,6 +1205,22 @@ test('colour tools: a .cube LUT, levels and curves all reach the export', async 
   expect(c[0]).toBeGreaterThan(200);
   expect(c[1]).toBeGreaterThan(35);
   expect(c[1]).toBeLessThan(110);
+
+  // A LUT is saved with the project and survives a reload.
+  await page.keyboard.press('Escape');
+  await commit(page, (d) => {
+    const cl: any = Object.values(d.clips)[0];
+    cl.effects = [{ id: 'lt', type: 'lut', enabled: true, params: { lut: Object.keys(d.luts ?? {})[0] ?? '', amount: 100 } }];
+  });
+  await page.waitForFunction(() => (window as any).__cutline.editor.getState().saveState === 'saved');
+  await page.reload();
+  await page.waitForFunction(() => Object.keys((window as any).__cutline?.editor.getState().project.clips ?? {}).length === 1);
+  const kept = await page.evaluate(() => {
+    const p = (window as any).__cutline.editor.getState().project;
+    const fx = (Object.values(p.clips)[0] as any).effects[0];
+    return { has: !!p.luts?.[fx.params.lut], size: p.luts?.[fx.params.lut]?.size };
+  });
+  expect(kept).toEqual({ has: true, size: 2 });
 });
 
 test('roll, slip and slide edits, with the edit point shown in the preview while dragging', async ({ page }) => {
